@@ -411,6 +411,7 @@ end
 
 function sign_aws2_request!(r::AWSRequest)
 
+    @assert false
 #=
     assign $args url query
     assign [uri::split $url] host path

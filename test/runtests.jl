@@ -252,7 +252,7 @@ versions = s3_list_versions(aws, bucket_name, "key3")
 @test (s3_get(aws, bucket_name, "key3"; version = versions[1]["VersionId"])
       == "data3.v3")
 
-# Check puring of old versions...
+# Check pruning of old versions...
 
 s3_purge_versions(aws, bucket_name, "key3")
 versions = s3_list_versions(aws, bucket_name, "key3")
@@ -314,12 +314,6 @@ m = sqs_receive_message(qa)
 
 #r = dynamodb(aws, "ListTables", "{}")
 #println(r)
-#
-#r = sns(aws,"CreateTopic","foo-test-topic")
-#println(r.data)
-#r = sns(aws,"Publish","foo-test-topic", {"Message" => "Hello!"})
-#println(r.data)
-
 
 
 println("Done!")
