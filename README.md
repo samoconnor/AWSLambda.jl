@@ -8,7 +8,7 @@ Create an "aws" dictionary containing user credentials and region...
 
 ```julia
 aws = {
-    "user_arn"      => "arn:aws:iam::xxxxxxxxxx:user/ocaws.jl.test,
+    "user_arn"      => "arn:aws:iam::xxxxxxxxxx:user/ocaws.jl.test",
     "access_key_id" => "AKIDEXAMPLE",
     "secret_key"    => "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
     "region"        => "ap-southeast-2"
