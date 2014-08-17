@@ -16,6 +16,10 @@ Parsing of XML and JSON API error messages to AWSException type.
 Automatic API Request retry in case of ExpiredToken or HTTP Redirect.
 
 
+### Exceptions
+
+May throw: UVError, HTTPException or AWSException.
+
 
 ### Examples
 

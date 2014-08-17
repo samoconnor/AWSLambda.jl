@@ -301,7 +301,7 @@ sns_create_topic(aws, test_topic)
 sns_subscribe_sqs(aws, test_topic, qa; raw = true)
 
 sns_publish(aws, test_topic, "Hello SNS!")
-
+sleep(5)
 m = sqs_receive_message(qa)
 @test m["message"] == "Hello SNS!"
 

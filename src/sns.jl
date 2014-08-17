@@ -1,0 +1,93 @@
+#==============================================================================#
+# sns.jl
+#
+# SNS API. See http://aws.amazon.com/documentation/sns/
+#
+# Copyright Sam O'Connor 2014 - All rights reserved
+#==============================================================================#
+
+
+export sns_delete_topic, sns_create_topic, sns_subscribe_sqs,
+       sns_subscribe_email, sns_publish
+
+
+sns_arn(aws, topic_name) = arn(aws, "sns", topic_name)
+
+
+function sns(aws::Dict, action::String, topic::String, query=Dict())
+
+    sns(aws, action, merge(query, {"Name"     => topic,
+                                   "TopicArn" => arn(aws, "sns", topic)}))
+end
+
+
+function sns_delete_topic(aws, topic_name)
+
+    sns(aws, "DeleteTopic", topic_name, {"Name" => topic_name})
+end
+
+
+function sns_create_topic(aws, topic_name)
+
+    sns(aws, "CreateTopic", {"Name" => topic_name})
+end
+
+
+function sns_subscribe_sqs(aws, topic_name, queue; raw=flase)
+
+    r = sns(aws, "Subscribe", topic_name, {"Endpoint" => sqs_arn(queue),
+                                           "Protocol" => sqs})
+    if raw
+        sns(aws, "SetSubscriptionAttributes", topic_name, {
+            "SubscriptionArn" => get(parse_xml(r.data), "SubscriptionArn"),
+            "AttributeName" => "RawMessageDelivery",
+            "AttributeValue" => "true"
+        })
+    end
+
+    sqs(queue, "SetQueueAttributes", {
+        "Attribute.Name" => "Policy",
+        "Attribute.Value" => """{
+          "Version": "2008-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": "*"
+              },
+              "Action": "SQS:SendMessage",
+              "Resource": "$(sqs_arn(queue))",
+              "Condition": {
+                "ArnEquals": {
+                  "aws:SourceArn": "$(sns_arn(aws, topic_name))"
+                }
+              }
+            }
+          ]
+        }"""
+    })
+end
+
+
+function sns_subscribe_email(aws, topic_name, email)
+
+    sns(aws, topic_name, "Subscribe", {"Endpoint" => email,
+                                       "Protocol" => "email"})
+end
+
+
+function sns_publish(aws, topic_name, message, subject="")
+
+    args = {"Message" => message}
+    if subject != ""
+        args["Subject"] = subject[1:100]
+    end
+    sns(aws, "Publish", topic_name, args)
+end
+
+
+
+#==============================================================================#
+# End of file.
+#==============================================================================#
+
