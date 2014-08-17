@@ -2,6 +2,21 @@
 
 Work in progress.
 
+
+### Features
+
+S3, SQS, SNS, EC2, IAM, STS, SDB, DynamoDB
+
+AWS Signature Version 4.
+
+Automatic HTTP request retry with exponential back-off.
+
+Parsing of XML and JSON API error messages to AWSException type.
+
+Automatic API Request retry in case of ExpiredToken or HTTP Redirect.
+
+
+
 ### Examples
 
 Create an "aws" dictionary containing user credentials and region...
