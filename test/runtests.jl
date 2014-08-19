@@ -14,8 +14,6 @@ import Dates: format, DateTime, now
 import OCAWS: @safe, @trap, @with_retry_limit, @retry
 
 
-println(ec2_get_instance_credentials(Dict()))
-
 
 #-------------------------------------------------------------------------------
 # AWS Signature Version 4 test
@@ -103,8 +101,9 @@ import OCAWS: aws_endpoint, s3_endpoint
 
 @test aws_endpoint("sqs", "us-east-1") == "http://sqs.us-east-1.amazonaws.com"
 @test aws_endpoint("sdb", "us-east-1") == "http://sdb.amazonaws.com"
-@test aws_endpoint("iam", "us-east-1") == "https://iam.us-east-1.amazonaws.com"
-@test aws_endpoint("sts", "us-east-1") == "https://sts.us-east-1.amazonaws.com"
+@test aws_endpoint("iam", "us-east-1") == "https://iam.amazonaws.com"
+@test aws_endpoint("iam", "eu-west-1") == "https://iam.amazonaws.com"
+@test aws_endpoint("sts", "us-east-1") == "https://sts.amazonaws.com"
 @test aws_endpoint("sqs", "eu-west-1") == "http://sqs.eu-west-1.amazonaws.com"
 @test aws_endpoint("sdb", "eu-west-1") == "http://sdb.eu-west-1.amazonaws.com"
 @test aws_endpoint("sns", "eu-west-1") == "http://sns.eu-west-1.amazonaws.com"
@@ -112,6 +111,22 @@ import OCAWS: aws_endpoint, s3_endpoint
 @test s3_endpoint("us-east-1", "bucket") == "http://bucket.s3.amazonaws.com"
 @test s3_endpoint("eu-west-1", "bucket") ==
       "http://bucket.s3-eu-west-1.amazonaws.com"
+
+
+
+#-------------------------------------------------------------------------------
+# IAM tests
+#-------------------------------------------------------------------------------
+
+test_user = "ocaws-jl-test-user-" * lowercase(format(now(),"yyyymmddTHHMMSSZ"))
+
+user = iam_create_user(aws, test_user)
+println(user)
+
+user = iam_get_user(aws, test_user)
+println(user)
+
+iam_delte_user(aws, test_user)
 
 
 
@@ -210,8 +225,8 @@ s3_put(aws, bucket_name, "key3", "data3.v3")
 
 catch e
 
-    if typeof(e) == AWSException && e.code == "NoSuchKey"
-        sleep(3)
+    if typeof(e) == AWSException && e.code in {"NoSuchKey", "NoSuchBucket"}
+        sleep(5)
         @retry
     end
 end

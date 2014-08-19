@@ -38,7 +38,7 @@ aws_request(aws, query) = aws_request(aws; query = format_query_str(query))
 
 
 
-# SQS, EC2, IAM and SDB API Requests.
+# SQS, SNS, EC2, and SDB API Requests.
 #
 # Call the genric aws_request() with API Version, and Action in query string
 
@@ -46,8 +46,6 @@ for (service, api_version) in {
     (:sqs, "2012-11-05"),
     (:sns, "2010-03-31"),
     (:ec2, "2014-02-01"),
-    (:iam, "2010-05-08"),
-    (:sts, "2011-06-15"),
     (:sdb, "2009-04-15"),
 }
     eval(quote
@@ -55,6 +53,27 @@ for (service, api_version) in {
         function ($service)(aws::Dict, action::String, query::Dict)
 
             aws_request(merge(aws,   {"service" => string($service)}),
+                        merge(query, {"Version" => $api_version,
+                                      "Action"  => action}))
+        end
+    end)
+end
+
+
+# IAM and STS API Requests.
+#
+# Different because region must be overridden to "us-east-1"
+
+for (service, api_version) in {
+    (:iam, "2010-05-08"),
+    (:sts, "2011-06-15"),
+}
+    eval(quote
+
+        function ($service)(aws::Dict, action::String, query::Dict)
+
+            aws_request(merge(aws,   {"service" => string($service),
+                                      "region" => "us-east-1"}),
                         merge(query, {"Version" => $api_version,
                                       "Action"  => action}))
         end
@@ -139,7 +158,7 @@ function aws_attempt(request::AWSRequest)
     # Try request 3 times to deal with possible Redirect and ExiredToken...
     @with_retry_limit 3 try 
 
-        if !haskey(request.aws, "access_key_id")
+        if !haskey(request.aws, "access_key_id") && localhost_is_ec2()
             request.aws = ec2_get_instance_credentials(request.aws)
         end
 
@@ -201,8 +220,13 @@ end
 
 function aws_endpoint(service, region)
 
-    # Use https for Identity and Access Management API...
-    protocol = service in {"iam", "sts"} ? "https" : "http"
+    protocol = "http"
+
+    # Identity and Access Management API: https with no region suffix...
+    if service in {"iam", "sts"}
+        protocol = "https"
+        region = ""
+    end
 
     # No region sufix for sdb in default region...
     if "$service.$region" != "sdb.us-east-1" && region != ""
@@ -250,7 +274,7 @@ s3_arn(bucket, path) = s3_arn("$bucket/$path")
 
 import JSON: JSON, json
 
-export localhost_is_ec2, ec2_get_instance_credentials
+export localhost_is_ec2, ec2_metadata, ec2_get_instance_credentials
 
 function localhost_is_ec2() 
 
@@ -268,7 +292,7 @@ function ec2_metadata(key)
 
     @assert localhost_is_ec2()
 
-    r = http_request("169.254.169.254", "latest/meta-data/$key")
+    r = http_request("169.254.169.254", "latest/meta-data/$key").data
     return r.data
 end
 
@@ -315,6 +339,7 @@ ismatch(pattern::String,s::String) = ismatch(Regex(pattern), s)
 include("s3.jl")
 include("sqs.jl")
 include("sns.jl")
+include("iam.jl")
 
 
 end # module

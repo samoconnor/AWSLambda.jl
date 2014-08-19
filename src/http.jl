@@ -57,8 +57,9 @@ function http_request(uri::URI, request::Request)
 
     @with_retry_limit 4 try 
 
-#        println(uri)
-#        println(request.headers)
+        #println(uri)
+        #println(request.headers)
+        #println(request.data)
         return http_attempt(uri, request)
 
     catch e

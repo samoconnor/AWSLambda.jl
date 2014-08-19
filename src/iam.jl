@@ -7,6 +7,11 @@
 #==============================================================================#
 
 
+export iam_get_user, iam_get_role, iam_create_user, iam_create_access_key,
+       iam_delete_access_key, iam_delete_user, iam_put_user_policy,
+       iam_format_policy
+
+
 role_arn(aws, role_name) = arn(aws, "iam", "role/$role_name")
 user_arn(aws, user_name) = arn(aws, "iam", "user/$user_name")
 
@@ -52,9 +57,10 @@ function iam_create_access_key(aws, user_name)
 end
 
 
-function iam_delete_user
+function iam_delete_user(aws, user_name)
 
     r = iam(aws, "ListUserPolicies", {"UserName" => user_name})
+println(r.data)
 #    for {- policy} in 
 #                    ListUserPoliciesResult PolicyNames] {
         iam(aws, "DeleteUserPolicy", {"UserName" => user_name,
@@ -89,6 +95,7 @@ function iam_format_policy(policy_statement)
 #    json [dict create Version 2012-10-17 Statement $policy_statement]
 end
 
+#=
 
 proc assume_aws_sts_role {aws duration_s name role {policy {}} {mfa {}}} {
 
@@ -243,6 +250,7 @@ proc enable_aws_iam_mfa {aws mfa_name user_name code1 code2} {
 }
 
 
+=#
 
 #==============================================================================#
 # End of file.
