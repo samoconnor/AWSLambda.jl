@@ -23,21 +23,21 @@ May throw: UVError, HTTPException or AWSException.
 
 ### Dependencies
 
-https://github.com/JuliaLang/JSON.jl
+[JSON.jl](https://github.com/JuliaLang/JSON.jl)
 
-https://github.com/dcjones/Zlib.jl -- for crc32()
+[Zlib.jl](https://github.com/dcjones/Zlib.jl) -- for crc32()
 
-https://github.com/Keno/URIParser.jl
+[URIParser.jl](https://github.com/Keno/URIParser.jl)
 
-https://github.com/Keno/Requests.jl
+[Requests.jl](https://github.com/Keno/Requests.jl)
 
-https://github.com/JuliaLang/HttpCommon.jl
+[HttpCommon.jl](https://github.com/JuliaLang/HttpCommon.jl)
 
-https://github.com/staticfloat/Nettle.jl
+[Nettle.jl](https://github.com/staticfloat/Nettle.jl)
 
-https://github.com/quinnj/Dates.jl
+[Dates.jl](https://github.com/quinnj/Dates.jl)
 
-https://github.com/lindahua/LightXML.jl
+[LightXml.jl](https://github.com/lindahua/LightXML.jl)
 
 
 ### Examples
