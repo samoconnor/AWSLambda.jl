@@ -80,7 +80,7 @@ end
 function http_request(host, resource)
 
     http_request(URI("http://$host/$resource"),
-                 Request("GET", resoure, (String=>String)[], ""))
+                 Request("GET", resource, (String=>String)[], ""))
 end
 
 

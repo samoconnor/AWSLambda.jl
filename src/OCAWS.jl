@@ -248,12 +248,15 @@ s3_arn(bucket, path) = s3_arn("$bucket/$path")
 # EC2 Metadata
 #------------------------------------------------------------------------------#
 
+import JSON: JSON, json
+
+export localhost_is_ec2, ec2_get_instance_credentials
 
 function localhost_is_ec2() 
 
     host = readall(`hostname -f`)
-    return ismatch("compute.internal$", host) ||
-           ismatch("ec2.internal$", host)
+    return ismatch(r"compute.internal$", host) ||
+           ismatch(r"ec2.internal$", host)
 end
 
 
@@ -265,7 +268,6 @@ function ec2_metadata(key)
 
     @assert localhost_is_ec2()
 
-    http_request(URI(r.url), Request(r))
     r = http_request("169.254.169.254", "latest/meta-data/$key")
     return r.data
 end
@@ -275,25 +277,33 @@ function ec2_get_instance_credentials(aws)
 
     @assert localhost_is_ec2()
 
-    if {$option != "-force-refresh"
-    && [info exists ::oc_aws_ec2_instance_credentials]} {
-        return [merge $aws $::oc_aws_ec2_instance_credentials]
-    }
+#    info = """{
+#        "Code" : "Success",
+#        "LastUpdated" : "2014-08-19T01:50:47Z",
+#        "InstanceProfileArn" : "arn:aws:iam::317222206419:instance-profile/au-pkg-web-server-role",
+#        "InstanceProfileId" : "AIPAIM5BPW25I5UTBFTXQ"
+#    }"""
+    info = ec2_metadata("iam/info")
+    info = JSON.parse(info)
 
-    info = JSON.parse(ec2_metadata("iam/info"))
-
+#    name = "au-pkg-web-server-role"
+#    creds ="""{
+#  "Code" : "Success",
+#  "LastUpdated" : "2014-08-19T01:51:24Z",
+#  "Type" : "AWS-HMAC",
+#  "AccessKeyId" : "ASIAJSIPAUZNPW6L5IHQ",
+#  "SecretAccessKey" : "keaa66DOgu8/PjcO87YksE11W5LaaV4xCNKvcGGm",
+#  "Token" : "AQoDYXdzEOP//////////wEa0AM5DS1/TGrny9Dq/8GcXVoNug9RZgv/zR9l05/h1dZPpTcH2YEQfYBM4Wpt55Fd9KQ28f9jSFLbG+GP/pWzW95b+v2P1gouvSwLlrcqaqs/Fxw8O7rVY7DfqYFchYxBL/NctlGk4oyMBgwWVRQ7juz7uhcfHcahFUurXE3BxlHc8DmMjLKaF1W10rr/2Ev/1I33z1e4XC6cg0XznYK+X8NUlfGc1rPklRvr/fUYncIdhsRYoC8rpGwN//QnQu5BoM4PC2N92K2Jqxh0Xro3GB6n/6ha1jAQRJShhIWCKSUKrorENL6byNzSBI2f75CYPeoQN+r8qJM9rk/tYJ9RlmEWGfGovVMza6WsIN9AOH92XBuX5iTnb1Z/v2sUjSSMLfQaYYo3KJrI7F9B3FXp69TDJYOtvrN9ErZKoDEI29M0ONrdPfCj5j89qcwtlaVq07Jqnh6Lhk1iBnxtKufAf8NmS2GiQqBscMUN1PiP7rHQTD8fTY3CtCy55n5hvAd/AnEYeP0N7I7Lah6wDZUV5F+jvCzmc9aLSRWv2SeuZtkBnNs1cCmGbdzcjRUejrxYtisTiFo5zJJgwdGf67cegSm3STply4kgsUM6WLoqAJeVWCDl2sqfBQ==",
+#  "Expiration" : "2014-08-19T08:20:53Z"
+#}"""
     name = ec2_metadata("iam/security-credentials/")
-    creds = JSON.parse(ec2_metadata("iam/security-credentials/$name"))
+    creds = ec2_metadata("iam/security-credentials/$name")
+    creds = JSON.parse(creds)
 
-#=
-    set ::oc_aws_ec2_instance_credentials \
-        [dict create "access_key_id" => [get $creds AccessKeyId] \
-                     "secret_key" =>   [get $creds SecretAccessKey] \
-                     "token" =>      [get $creds Token] \
-                     "user_arn" =>    [get $info InstanceProfileArn]]
-    return [merge $aws $::oc_aws_ec2_instance_credentials]
-}
-=#
+    merge(aws, {"access_key_id" => creds["AccessKeyId"],
+                "secret_key"    => creds["SecretAccessKey"],
+                "token"         => creds["Token"],
+                "user_arn"      => info["InstanceProfileArn"]})
 end
 
 

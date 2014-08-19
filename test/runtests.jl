@@ -14,6 +14,8 @@ import Dates: format, DateTime, now
 import OCAWS: @safe, @trap, @with_retry_limit, @retry
 
 
+println(ec2_get_instance_credentials(Dict()))
+
 
 #-------------------------------------------------------------------------------
 # AWS Signature Version 4 test
@@ -243,14 +245,24 @@ end
 
 # Check versioned object content...
 
-versions = s3_list_versions(aws, bucket_name, "key3")
-@test length(versions) == 3
-@test (s3_get(aws, bucket_name, "key3"; version = versions[3]["VersionId"])
-      == "data3.v1")
-@test (s3_get(aws, bucket_name, "key3"; version = versions[2]["VersionId"])
-      == "data3.v2")
-@test (s3_get(aws, bucket_name, "key3"; version = versions[1]["VersionId"])
-      == "data3.v3")
+@with_retry_limit 4 try
+
+    versions = s3_list_versions(aws, bucket_name, "key3")
+    @test length(versions) == 3
+    @test (s3_get(aws, bucket_name, "key3"; version = versions[3]["VersionId"])
+          == "data3.v1")
+    @test (s3_get(aws, bucket_name, "key3"; version = versions[2]["VersionId"])
+          == "data3.v2")
+    @test (s3_get(aws, bucket_name, "key3"; version = versions[1]["VersionId"])
+          == "data3.v3")
+
+catch e
+
+    if typeof(e) == AWSException && e.code == "NoSuchBucket"
+        sleep(1)
+        @retry
+    end
+end
 
 # Check pruning of old versions...
 
