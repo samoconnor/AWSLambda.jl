@@ -21,6 +21,25 @@ Automatic API Request retry in case of ExpiredToken or HTTP Redirect.
 May throw: UVError, HTTPException or AWSException.
 
 
+### Dependencies
+
+https://github.com/JuliaLang/JSON.jl
+
+https://github.com/dcjones/Zlib.jl -- for crc32()
+
+https://github.com/Keno/URIParser.jl
+
+https://github.com/Keno/Requests.jl
+
+https://github.com/JuliaLang/HttpCommon.jl
+
+https://github.com/staticfloat/Nettle.jl
+
+https://github.com/quinnj/Dates.jl
+
+https://github.com/lindahua/LightXML.jl
+
+
 ### Examples
 
 Create an "aws" dictionary containing user credentials and region...
