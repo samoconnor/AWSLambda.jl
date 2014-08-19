@@ -94,8 +94,8 @@ function sign_aws4_request!(r::AWSRequest, t)
         r.headers["Content-Type"] = 
             "application/x-www-form-urlencoded; charset=utf-8"
     end
-    if haskey(r.aws, "AWSToken")
-        r.headers["x-amz-security-token"] = r.aws["AWSToken"]
+    if haskey(r.aws, "token")
+        r.headers["x-amz-security-token"] = r.aws["token"]
     end
 
     # Sort and lowercase() Headers to produce canonical form...

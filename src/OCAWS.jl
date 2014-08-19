@@ -47,6 +47,7 @@ for (service, api_version) in {
     (:sns, "2010-03-31"),
     (:ec2, "2014-02-01"),
     (:iam, "2010-05-08"),
+    (:sts, "2011-06-15"),
     (:sdb, "2009-04-15"),
 }
     eval(quote
@@ -139,7 +140,7 @@ function aws_attempt(request::AWSRequest)
     @with_retry_limit 3 try 
 
         if !haskey(request.aws, "access_key_id")
-            request.aws = get_aws_ec2_instance_credentials(request.aws)
+            request.aws = ec2_get_instance_credentials(request.aws)
         end
 
         request.headers["User-Agent"] = "JuliaAWS.jl/0.0.0"
@@ -248,36 +249,52 @@ s3_arn(bucket, path) = s3_arn("$bucket/$path")
 #------------------------------------------------------------------------------#
 
 
+function localhost_is_ec2() 
+
+    host = readall(`hostname -f`)
+    return ismatch("compute.internal$", host) ||
+           ismatch("ec2.internal$", host)
+end
+
+
 # Lookup EC2 meta-data "key".
-# Must be called from and EC2 instance.
+# Must be called from an EC2 instance.
 # http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AESDG-chapter-instancedata.html
 
-#=
 function ec2_metadata(key)
 
-    r = http_attempt ("169.254.169.254", "latest/meta-data/$key")
+    @assert localhost_is_ec2()
+
+    http_request(URI(r.url), Request(r))
+    r = http_request("169.254.169.254", "latest/meta-data/$key")
     return r.data
 end
 
-proc get_aws_ec2_instance_credentials {aws {option {}}} {
+
+function ec2_get_instance_credentials(aws)
+
+    @assert localhost_is_ec2()
 
     if {$option != "-force-refresh"
     && [info exists ::oc_aws_ec2_instance_credentials]} {
         return [merge $aws $::oc_aws_ec2_instance_credentials]
     }
 
-    set info [: [aws_ec2_metadata iam/info] | parse json]
-    set name [aws_ec2_metadata iam/security-credentials/]
-    set creds [: [aws_ec2_metadata iam/security-credentials/$name] | parse json]
+    info = JSON.parse(ec2_metadata("iam/info"))
 
+    name = ec2_metadata("iam/security-credentials/")
+    creds = JSON.parse(ec2_metadata("iam/security-credentials/$name"))
+
+#=
     set ::oc_aws_ec2_instance_credentials \
-        [dict create AWSAccessKeyId [get $creds AccessKeyId] \
-                     AWSSecretKey   [get $creds SecretAccessKey] \
-                     AWSToken       [get $creds Token] \
-                     AWSUserArn     [get $info InstanceProfileArn]]
+        [dict create "access_key_id" => [get $creds AccessKeyId] \
+                     "secret_key" =>   [get $creds SecretAccessKey] \
+                     "token" =>      [get $creds Token] \
+                     "user_arn" =>    [get $info InstanceProfileArn]]
     return [merge $aws $::oc_aws_ec2_instance_credentials]
 }
 =#
+end
 
 
 
