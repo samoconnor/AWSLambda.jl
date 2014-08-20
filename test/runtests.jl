@@ -118,6 +118,7 @@ import OCAWS: aws_endpoint, s3_endpoint
 # IAM tests
 #-------------------------------------------------------------------------------
 
+#=
 test_user = "ocaws-jl-test-user-" * lowercase(format(now(),"yyyymmddTHHMMSSZ"))
 
 user = iam_create_user(aws, test_user)
@@ -127,6 +128,7 @@ user = iam_get_user(aws, test_user)
 println(user)
 
 iam_delte_user(aws, test_user)
+=#
 
 
 
@@ -207,7 +209,6 @@ s3_put(aws, bucket_name, "key3", "data3.v1")
 s3_put(aws, bucket_name, "key3", "data3.v2")
 s3_put(aws, bucket_name, "key3", "data3.v3")
 
-
 @with_retry_limit 4 try
 
     # Check that test objects have expected content...
@@ -230,6 +231,9 @@ catch e
         @retry
     end
 end
+
+url = s3_sign_url(aws, bucket_name, "key1")
+@test readall(`curl -o - $url`) == "data1.v1"
 
 
 @with_retry_limit 4 try
@@ -331,6 +335,14 @@ sns_publish(aws, test_topic, "Hello SNS!")
 sleep(5)
 m = sqs_receive_message(qa)
 @test m["message"] == "Hello SNS!"
+
+
+
+#-------------------------------------------------------------------------------
+# SimpleDB tests
+#-------------------------------------------------------------------------------
+
+println(sdb_list_domains(aws))
 
 
 

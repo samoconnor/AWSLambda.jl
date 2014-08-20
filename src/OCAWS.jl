@@ -163,9 +163,16 @@ function aws_attempt(request::AWSRequest)
         end
 
         request.headers["User-Agent"] = "JuliaAWS.jl/0.0.0"
-        request.headers["Content-Length"] = length(request.content) |> string
+        request.headers["Host"]       = URI(request.url).host
+
+        if !haskey(request.headers, "Content-Type") && request.verb == "POST"
+            request.headers["Content-Type"] = 
+                "application/x-www-form-urlencoded; charset=utf-8"
+        end
 
         sign_aws_request!(request)
+
+        request.headers["Content-Length"] = length(request.content) |> string
 
         return http_request(request)
 
@@ -340,6 +347,7 @@ include("s3.jl")
 include("sqs.jl")
 include("sns.jl")
 include("iam.jl")
+include("sdb.jl")
 
 
 end # module
@@ -349,4 +357,3 @@ end # module
 #==============================================================================#
 # End of file.
 #==============================================================================#
-

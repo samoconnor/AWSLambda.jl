@@ -8,13 +8,13 @@
 
 
 import Nettle: sha256_hash, sha256_hmac, md5_hash
-import Dates: format, DateTime, now
+import Dates: format, DateTime, now, Second
 
 
 function sign_aws_request!(r::AWSRequest, t = now())
 
     if r.aws["service"] == "sdb"
-        sign_aws2_request!(r)
+        sign_aws2_request!(r, t)
     else
         sign_aws4_request!(r, t)
     end
@@ -24,35 +24,35 @@ end
 # Create AWS Signature Version 2 Authentication query parameters.
 # http://docs.aws.amazon.com/general/latest/gr/signature-version-2.html
 
-function sign_aws2_request!(r::AWSRequest)
+function sign_aws2_request!(r::AWSRequest, t)
 
-    @assert false
-#=
-    assign $args url query
-    assign [uri::split $url] host path
+    uri = URI(r.url)
 
-    set common [subst {
-        AWSAccessKeyId    [get $aws AWSAccessKeyId]
-        Expires           [aws_iso8601 [expr {[clock seconds] + 120}]]
-        SignatureVersion  2
-        SignatureMethod   HmacSHA256
-    }]
-    if {[exists $aws AWSToken]} {
-        dset common SecurityToken [get $aws AWSToken]
-    }
-    set query [merge $common $query]
+    query = Dict{String, String}()
+    for elem in split(r.content, '&', false)
+        (n, v) = split(elem, "=", true)
+        query[n] = v
+    end
+    
+    r.headers["Content-Type"] = 
+        "application/x-www-form-urlencoded; charset=utf-8"
 
-    foreach key [lsort [keys $query]] {
-        dset sorted $key [get $query $key]
-    }
-    set query $sorted
+    query["AWSAccessKeyId"] = r.aws["access_key_id"]
+    query["Expires"] = format(t + Second(120), "yyyy-mm-ddTHH:MM:SSZ")
+    query["SignatureVersion"] = "2"
+    query["SignatureMethod"] = "HmacSHA256"
+    if haskey(r.aws, "token")
+        query["SecurityToken"] = r.aws["token"]
+    end
 
-    set digest "POST\n$host\n/$path\n[qstring $query]"
-    dset query Signature [sign_aws_string $aws sha2 $digest]
+    query = [(k, query[k]) for k in sort(collect(keys(query)))]
 
-    return $query
-=#
+    to_sign = "POST\n$(uri.host)\n$(uri.path)\n$(format_query_str(query))"
+    
+    secret = r.aws["secret_key"]
+    push!(query, ("Signature", sha256_hmac(secret, to_sign) |> base64 |> strip))
 
+    r.content = format_query_str(query)
 end
     
                                         
@@ -83,17 +83,11 @@ function sign_aws4_request!(r::AWSRequest, t)
 
     # HTTP headers...
     delete!(r.headers, "Authorization")
-    uri = URI(r.url)
     merge!(r.headers, {
         "x-amz-content-sha256" => content_hash,
         "x-amz-date"           => datetime,
-        "Host"                 => uri.host,
         "Content-MD5"          => base64(md5_hash(r.content))
     })
-    if !haskey(r.headers, "Content-Type") && r.verb == "POST"
-        r.headers["Content-Type"] = 
-            "application/x-www-form-urlencoded; charset=utf-8"
-    end
     if haskey(r.aws, "token")
         r.headers["x-amz-security-token"] = r.aws["token"]
     end
@@ -103,6 +97,7 @@ function sign_aws4_request!(r::AWSRequest, t)
     signed_headers = join(sort([lowercase(k) for k in keys(r.headers)]), ";")
 
     # Sort Query String...
+    uri = URI(r.url)
     query = query_params(uri)
     query = [(k, query[k]) for k in sort(collect(keys(query)))]
 

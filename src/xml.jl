@@ -36,14 +36,17 @@ end
 get(d::XMLDocument, name, default="") = get(root(d), name, default)
 
 
-function list(xdoc::XMLDocument, list_tag, item_tag, subitem_tag)
+function list(xdoc::XMLDocument, list_tag, item_tag, subitem_tag="")
 
     result = String[]
 
     l = find_element(root(xdoc), list_tag)
     for e in get_elements_by_tagname(l, item_tag)
 
-        push!(result, content(find_element(e, subitem_tag))) 
+        if subitem_tag != ""
+            e = find_element(e, subitem_tag)
+        end
+        push!(result, content(e))
     end
 
     return result

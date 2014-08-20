@@ -6,10 +6,10 @@
 # Copyright Sam O'Connor 2014 - All rights reserved
 #==============================================================================#
 
-
 export s3_put, s3_get, s3_exists, s3_delete, s3_copy, s3_create_bucket,
        s3_enable_versioning, s3_delete_bucket, s3_list_buckets,
-       s3_list_objects, s3_list_versions, s3_get_meta, s3_purge_versions
+       s3_list_objects, s3_list_versions, s3_get_meta, s3_purge_versions,
+       s3_sign_url
 
 
 # See http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectGET.html
@@ -237,28 +237,27 @@ function s3_put(aws, bucket, path, data, data_type="")
 end
 
 
-#=
-proc sign_aws_s3_url {aws bucket path seconds} {
-    aws_attempt sign_aws_s3_url_attempt $aws $bucket $path $seconds
-}
+import Dates: now, datetime2unix
+import Nettle: sha1_hmac
 
 
-proc sign_aws_s3_url_attempt {aws bucket path seconds} {
-    # Signed URL that grants access to "path" for "seconds".
+function s3_sign_url(aws, bucket, path, seconds = 3600)
 
-    dset query AWSAccessKeyId [get $aws AWSAccessKeyId]
-    dset query x-amz-security-token [get $aws AWSToken]
-    dset query Expires [expr {[clock seconds] + $seconds}]
-    dset query response-content-disposition attachment
+    query = {"AWSAccessKeyId" =>  aws["access_key_id"],
+             "x-amz-security-token" => get(aws, "token", ""),
+             "Expires" => string(int(datetime2unix(now()) + seconds)),
+             "response-content-disposition" => "attachment"}
 
-    set digest "GET\n\n\n[get $query Expires]\n"
-    append digest "x-amz-security-token:[get $query x-amz-security-token]\n"
-    append digest "/$bucket/$path?response-content-disposition=attachment"
-    dset query Signature [sign_aws_string $aws sha1 $digest]
+    digest = "GET\n\n\n$(query["Expires"])\n" *
+             "x-amz-security-token:$(query["x-amz-security-token"])\n" *
+             "/$bucket/$path?response-content-disposition=attachment"
 
-    return [aws_s3_endpoint $bucket]$path?[qstring $query]
-}
-=#
+    key = aws["secret_key"]
+    query["Signature"] = sha1_hmac(key, digest) |> base64 |> strip
+
+    "$(s3_endpoint(aws["region"], bucket))/$path?$(format_query_str(query))"
+end
+
 
 
 
