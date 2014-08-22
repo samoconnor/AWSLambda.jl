@@ -172,8 +172,6 @@ function aws_attempt(request::AWSRequest)
 
         sign_aws_request!(request)
 
-        request.headers["Content-Length"] = length(request.content) |> string
-
         return http_request(request)
 
     catch e

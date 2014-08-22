@@ -53,6 +53,8 @@ end
 
 function http_request(uri::URI, request::Request)
 
+    request.headers["Content-Length"] = length(request.content) |> string
+
     delay = 0.05
 
     @with_retry_limit 4 try 
