@@ -10,6 +10,7 @@
 import LightXML: LightXML, XMLDocument, XMLElement, root, find_element, content,
                  get_elements_by_tagname, child_elements, name
 
+parse_xml(s::Array{UInt8,1}) = LightXML.parse_string(bytestring(s))
 parse_xml(s) = LightXML.parse_string(s)
 
 
@@ -38,7 +39,7 @@ get(d::XMLDocument, name, default="") = get(root(d), name, default)
 
 function list(xdoc::XMLDocument, list_tag, item_tag, subitem_tag="")
 
-    result = String[]
+    result = AbstractString[]
 
     l = find_element(root(xdoc), list_tag)
     for e in get_elements_by_tagname(l, item_tag)

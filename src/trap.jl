@@ -36,9 +36,20 @@ macro safe(try_expr::Expr)
 
     (try_block, exception, catch_block) = try_expr.args
 
-    push!(catch_block.args, :($exception == nothing || rethrow($exception)))
+    # Build safe try expression...
+    safe_try_expr = quote
+        try
+            $(esc(try_block))
 
-    return esc(try_expr)
+        catch $(esc(exception))
+
+            $(esc(catch_block))
+
+            if $(esc(exception)) != nothing
+                rethrow($(esc(exception)))
+            end
+        end
+    end
 end
 
 
@@ -49,7 +60,11 @@ macro trap(exception::Symbol, if_expr::Expr)
     (condition, action) = if_expr.args
 
     quote
-        if try $(esc(condition)) end
+        _trapped = false
+        try
+            _trapped = $(esc(condition))
+        end
+        if _trapped
             $(esc(action))
             $(esc(exception)) = nothing
         end

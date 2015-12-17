@@ -14,38 +14,56 @@ export sns_delete_topic, sns_create_topic, sns_subscribe_sqs,
 sns_arn(aws, topic_name) = arn(aws, "sns", topic_name)
 
 
-function sns(aws::Dict, action::String, topic::String, query=Dict())
+sns(aws, query) = do_request(post(aws, "sns", "2010-03-31", query))
 
-    sns(aws, action, merge(query, {"Name"     => topic,
-                                   "TopicArn" => arn(aws, "sns", topic)}))
+
+function sns(aws, action, topic; args...)
+
+    sns(aws, merge(StrDict(args),
+                   "Action" => action,
+                   "Name" => topic,
+                   "TopicArn" => sns_arn(aws, topic)))
+end
+
+
+function sns_create_topic(aws, topic_name) 
+
+    sns(aws, "CreateTopic", topic_name)
 end
 
 
 function sns_delete_topic(aws, topic_name)
 
-    sns(aws, "DeleteTopic", topic_name, {"Name" => topic_name})
+    sns(aws, "DeleteTopic", topic_name)
 end
 
 
-function sns_create_topic(aws, topic_name)
+function sns_publish(aws, topic_name, message, subject="No Subject")
 
-    sns(aws, "CreateTopic", {"Name" => topic_name})
+    if length(subject) > 100
+        subject = subject[1:100]
+    end
+    sns(aws, "Publish", topic_name, Message = message, Subject = subject)
 end
 
 
 function sns_subscribe_sqs(aws, topic_name, queue; raw=flase)
 
-    r = sns(aws, "Subscribe", topic_name, {"Endpoint" => sqs_arn(queue),
-                                           "Protocol" => sqs})
+    r = sns(aws, StrDict("Action" => "Subscribe",
+                         "Name" => topic_name,
+                         "TopicArn" => sns_arn(aws, topic_name),
+                         "Endpoint" => sqs_arn(queue),
+                         "Protocol" => "sqs"))
+
     if raw
-        sns(aws, "SetSubscriptionAttributes", topic_name, {
-            "SubscriptionArn" => get(parse_xml(r.data), "SubscriptionArn"),
-            "AttributeName" => "RawMessageDelivery",
-            "AttributeValue" => "true"
-        })
+        sns(aws, "SetSubscriptionAttributes", topic_name,
+                  SubscriptionArn = get(parse_xml(r.data), "SubscriptionArn"),
+                  AttributeName = "RawMessageDelivery",
+                  AttributeValue = "true")
     end
 
-    sqs(queue, "SetQueueAttributes", {
+    sqs(queue, StrDict(
+        "Action" => "SetQueueAttributes",
         "Attribute.Name" => "Policy",
         "Attribute.Value" => """{
           "Version": "2008-10-17",
@@ -65,24 +83,13 @@ function sns_subscribe_sqs(aws, topic_name, queue; raw=flase)
             }
           ]
         }"""
-    })
+    ))
 end
 
 
 function sns_subscribe_email(aws, topic_name, email)
 
-    sns(aws, topic_name, "Subscribe", {"Endpoint" => email,
-                                       "Protocol" => "email"})
-end
-
-
-function sns_publish(aws, topic_name, message, subject="")
-
-    args = {"Message" => message}
-    if subject != ""
-        args["Subject"] = subject[1:100]
-    end
-    sns(aws, "Publish", topic_name, args)
+    sns(aws, topic_name, "Subscribe", Endpoint = email, Protocol = "email")
 end
 
 

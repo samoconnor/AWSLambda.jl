@@ -8,6 +8,27 @@
 module OCAWS
 
 
+typealias StrDict Dict{ASCIIString,ASCIIString}
+typealias SymDict Dict{Symbol,Any}
+
+typealias AWSRequest SymDict
+
+symdict(;args...) = SymDict(args)
+
+macro symdict(args...)
+
+    if length(args) == 1
+        args = args[1].args
+    end
+
+    args = [esc(isa(a, Expr) ? a : :($a=$a)) for a in args]
+    for i in 1:length(args)
+        args[i].args[1].head = :kw
+    end
+    :(symdict($(args...)))
+end
+
+
 include("retry.jl")
 include("trap.jl")
 include("http.jl")
@@ -18,7 +39,8 @@ include("AWSException.jl")
 import Zlib: crc32
 
 
-export sqs, sns, ec2, iam, sdb, s3, dynamodb 
+export sqs, sns, ec2, iam, sdb, s3, sign!,
+       StrDict, SymDict, symdict, AWSRequest
 
 
 # Generic POST Query API request.
@@ -26,126 +48,76 @@ export sqs, sns, ec2, iam, sdb, s3, dynamodb
 # URL points to service endpoint. Query string is passed as POST data.
 # Works for everything except s3...
 
-function aws_request(aws; headers=Dict(), query="")
+function post(aws::Dict,
+              service::ASCIIString,
+              version::ASCIIString,
+              query::StrDict)
 
-    path = get(aws, "path", "/")
-    url = "$(aws_endpoint(aws["service"], aws["region"]))$path"
+    resource = get(aws, :resource, "/")
+    url = aws_endpoint(service, aws[:region]) * resource
+    content = format_query_str(merge(query, "Version" => version))
 
-    aws_attempt(AWSRequest(aws, "POST", url, path, headers, query))
-end
-
-aws_request(aws, query) = aws_request(aws; query = format_query_str(query))
-
-
-
-# SQS, SNS, EC2, and SDB API Requests.
-#
-# Call the genric aws_request() with API Version, and Action in query string
-
-for (service, api_version) in {
-    (:sqs, "2012-11-05"),
-    (:sns, "2010-03-31"),
-    (:ec2, "2014-02-01"),
-    (:sdb, "2009-04-15"),
-}
-    eval(quote
-
-        function ($service)(aws::Dict, action::String, query::Dict)
-
-            aws_request(merge(aws,   {"service" => string($service)}),
-                        merge(query, {"Version" => $api_version,
-                                      "Action"  => action}))
-        end
-    end)
+    merge(aws, @symdict(verb = "POST", service, resource, url, content))
 end
 
 
-# IAM and STS API Requests.
-#
-# Different because region must be overridden to "us-east-1"
+# POST API Requests for each AWS servce.
 
-for (service, api_version) in {
-    (:iam, "2010-05-08"),
-    (:sts, "2011-06-15"),
-}
-    eval(quote
+sqs(aws, query)   = do_request(post(aws, "sqs", "2012-11-05", query))
+sqs(aws; args...) = sqs(aws, StrDict(args))
 
-        function ($service)(aws::Dict, action::String, query::Dict)
-
-            aws_request(merge(aws,   {"service" => string($service),
-                                      "region" => "us-east-1"}),
-                        merge(query, {"Version" => $api_version,
-                                      "Action"  => action}))
-        end
-    end)
-end
+ec2(aws; args...) = do_request(post(aws, "ec2", "2014-02-01", StrDict(args)))
+sdb(aws; args...) = do_request(post(aws, "sdb", "2009-04-15", StrDict(args)))
+iam(aws; args...) = do_request(post(merge(aws, region = "us-east-1"),
+                                         "iam", "2010-05-08", StrDict(args)))
+sts(aws; args...) = do_request(post(merge(aws, region = "us-east-1"),
+                                         "iam", "2011-06-15", StrDict(args)))
 
 
 # S3 REST API request.
 #
-# Different to aws_request() because: S3 has a differnt endpoint URL scheme;
+# Different to do_request() because: S3 has a differnt endpoint URL scheme;
 # action is indicated by HTTP GET/PUT/DELETE; optional parameters are passed
 # in the URL query string and or as HTTP headers (e.g. Content-Type).
 
 function s3(aws, verb, bucket="";
-            headers=Dict(), path="", query=Dict(), version="", content="")
+            headers=StrDict(), path="", query=StrDict(), version="", content="",
+            return_stream=false)
 
     if version != ""
         query["versionId"] = version
     end
     query = format_query_str(query)
-    
+
     resource = "/$path$(query == "" ? "" : "?$query")"
-    url = "$(s3_endpoint(aws["region"], bucket))$resource"
+    url = s3_endpoint(aws[:region], bucket) * resource
 
-    aws_attempt(AWSRequest(merge(aws, {"service" => "s3"}),
-                           verb, url, resource, headers, content))
-end
+    r = merge(aws, @symdict(service = "s3",
+                            verb,
+                            url,
+                            resource,
+                            headers,
+                            content))
 
-
-# DynamoDB API request.
-#
-# Variation of generic aws_request(). Operation (e.g. PutItem, GetItem) is
-# passed in x-amz-target header. API parameters are passed as JSON POST data.
-# Response is JSON data.
-
-function dynamodb(aws, operation, json)
-
-    ddb = merge(aws,{"service" => "dynamodb"})
-
-    r = aws_request(ddb, query = json, headers = {
-        "x-amz-target" => "DynamoDB_20120810.$operation",
-        "Content-Type" => "application/x-amz-json-1.0"
-    })
-
-    @assert r.headers["x-amz-crc32"] == string(crc32(r.data))
-    JSON.parse(r.data)
+    do_request(r, return_stream)
 end
 
 
 
 #------------------------------------------------------------------------------#
-# AWS Request type
+# AWSRequest to Request conversion.
 #------------------------------------------------------------------------------#
 
 
-type AWSRequest
-    aws
-    verb
-    url
-    resource
-    headers
-    content
+function Request(r::AWSRequest)
+    Request(r[:verb], r[:resource], r[:headers], r[:content], URI(r[:url]))
 end
 
-AWSRequest() = AWSRequest(Dict(),"POST","","",Dict(),"")
-
-Request(r::AWSRequest) = Request(r.verb, r.resource, r.headers, r.content)
-
-http_request(r::AWSRequest) = http_request(URI(r.url), Request(r))
+http_request(r::AWSRequest, args...) = http_request(Request(r), args...)
 
 
 include("sign.jl")
+
 
 
 #------------------------------------------------------------------------------#
@@ -153,35 +125,39 @@ include("sign.jl")
 #------------------------------------------------------------------------------#
 
 
-function aws_attempt(request::AWSRequest)
+function do_request(r::AWSRequest, return_stream=false)
 
     # Try request 3 times to deal with possible Redirect and ExiredToken...
-    @with_retry_limit 3 try 
+    @max_attempts 3 try 
 
-        if !haskey(request.aws, "access_key_id") && localhost_is_ec2()
-            request.aws = ec2_get_instance_credentials(request.aws)
+        if !haskey(r[:creds], :access_key_id)
+            update_instance_credentials!(r[:creds])
         end
 
-        request.headers["User-Agent"] = "JuliaAWS.jl/0.0.0"
-        request.headers["Host"]       = URI(request.url).host
+        if !haskey(r, :headers)
+            r[:headers] = StrDict()
+        end
 
-        if !haskey(request.headers, "Content-Type") && request.verb == "POST"
-            request.headers["Content-Type"] = 
+        r[:headers]["User-Agent"] = "JuliaAWS.jl/0.0.0"
+        r[:headers]["Host"]       = URI(r[:url]).host
+
+        if !haskey(r[:headers], "Content-Type") && r[:verb] == "POST"
+            r[:headers]["Content-Type"] = 
                 "application/x-www-form-urlencoded; charset=utf-8"
         end
 
-        sign_aws_request!(request)
+        sign!(r)
 
-        return http_request(request)
+        return http_request(r, return_stream)
 
     catch e
 
         if typeof(e) == HTTPException
 
             # Try again on HTTP Redirect...
-            if (status(e) in {301, 302, 307}
+            if (status(e) in [301, 302, 307]
             &&  haskey(e.response.headers, "Location"))
-                request.url = e.response.headers["Location"]
+                r[:url] = e.response.headers["Location"]
                 @retry
             end
 
@@ -189,7 +165,7 @@ function aws_attempt(request::AWSRequest)
 
             # Try again on ExpiredToken error...
             if e.code == "ExpiredToken"
-                delete(request.aws, "access_key_id")
+                delete(r[:creds], :access_key_id)
                 @retry
             end
         end
@@ -228,7 +204,7 @@ function aws_endpoint(service, region)
     protocol = "http"
 
     # Identity and Access Management API: https with no region suffix...
-    if service in {"iam", "sts"}
+    if service in ["iam", "sts"]
         protocol = "https"
         region = ""
     end
@@ -251,10 +227,16 @@ end
 export aws_account_number, arn, s3_arn
 
 
-aws_account_number(aws) = split(aws["user_arn"], ":")[5]
+function aws_account_number(aws)
+
+    if !haskey(aws[:creds], :user_arn)
+        aws[:creds][:user_arn] = iam_whoami(aws)
+    end
+    split(aws[:creds][:user_arn], ":")[5]
+end
 
 
-function arn(aws, service, resource, region=get(aws, "region", ""),
+function arn(aws, service, resource, region=get(aws, :region, ""),
                                      account=aws_account_number(aws))
 
     if service == "s3"
@@ -283,6 +265,10 @@ export localhost_is_ec2, ec2_metadata, ec2_get_instance_credentials
 
 function localhost_is_ec2() 
 
+    if localhost_is_lambda()
+        return false
+    end
+
     host = readall(`hostname -f`)
     return ismatch(r"compute.internal$", host) ||
            ismatch(r"ec2.internal$", host)
@@ -302,22 +288,31 @@ function ec2_metadata(key)
 end
 
 
-function ec2_get_instance_credentials(aws)
+function update_ec2_instance_credentials!(aws)
 
     @assert localhost_is_ec2()
 
-    info = ec2_metadata("iam/info")
-    info = JSON.parse(info)
+    info  = ec2_metadata("iam/info")
+    info  = JSON.parse(info)
 
-    name = ec2_metadata("iam/security-credentials/")
+    name  = ec2_metadata("iam/security-credentials/")
     creds = ec2_metadata("iam/security-credentials/$name")
     creds = JSON.parse(creds)
 
-    merge(aws, {"access_key_id" => creds["AccessKeyId"],
-                "secret_key"    => creds["SecretAccessKey"],
-                "token"         => creds["Token"],
-                "user_arn"      => info["InstanceProfileArn"]})
+    aws[:access_key_id] = creds["AccessKeyId"]
+    aws[:secret_key]    = creds["SecretAccessKey"]
+    aws[:token]         = creds["Token"]
+    aws[:user_arn]      = info["InstanceProfileArn"]
 end
+
+
+
+#------------------------------------------------------------------------------#
+# Lambda Metadata
+#------------------------------------------------------------------------------#
+
+
+localhost_is_lambda() = haskey(ENV, "LAMBDA_TASK_ROOT")
 
 
 
@@ -326,10 +321,17 @@ end
 #------------------------------------------------------------------------------#
 
 
-import Base: readlines, ismatch
+import Base: readlines, ismatch, merge
+
+StrDict(d::Array{Any,1}) = StrDict([string(k) => string(v) for (k,v) in d])
+
+merge(d::Associative{Symbol,Any}) = d
+merge(d::Associative{Symbol,Any}; args...) = merge(d, SymDict(args))
+merge{K,V}(d::Dict{K,V}) = d
+merge{K,V}(d::Dict{K,V}, p::Pair{K,V}...) = merge(d, Dict{K,V}(p))
 
 
-function readlines(filename::String)
+function readlines(filename::AbstractString)
 
     f = open(filename)
     r = readlines(f)
@@ -338,7 +340,19 @@ function readlines(filename::String)
 end
 
 
-ismatch(pattern::String,s::String) = ismatch(Regex(pattern), s)
+function update_instance_credentials!(aws)
+
+    if localhost_is_ec2()
+        update_ec2_instance_credentials!(aws)
+    else 
+        aws[:access_key_id] = ENV["AWS_ACCESS_KEY_ID"]
+        aws[:secret_key]    = ENV["AWS_SECRET_ACCESS_KEY"]
+        aws[:token]         = ENV["AWS_SESSION_TOKEN"]
+    end
+end
+
+
+ismatch(pattern::AbstractString,s::AbstractString) = ismatch(Regex(pattern), s)
 
 
 include("s3.jl")

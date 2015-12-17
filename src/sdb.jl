@@ -16,14 +16,14 @@ export sdb_list_domains
 
 function sdb_list_domains(aws)
 
-    r = sdb(aws, "ListDomains", Dict())
+    r = sdb(aws, Action = "ListDomains")
     return list(parse_xml(r.data), "ListDomainsResult", "DomainName")
 end
 
 
-function sdb(aws, action, domain, query::Dict() = Dict())
+function sdb(aws, action, domain, query::Dict = Dict())
 
-    sdb(aws, action, merge(query, {"DomainName" => domain}))
+    sdb(aws, action, merge(query, Dict("DomainName" => domain)))
 end
 
 
@@ -31,9 +31,9 @@ sdb_create_domain(aws, domain) = sdb(aws, "CreateDomain", domain)
 sdb_delete_domain(aws, domain) = sdb(aws, "DeleteDomain", domain)
 
 
-function sdb(aws, action, domain, item, query::Dict() = Dict())
+function sdb(aws, action, domain, item, query::Dict = Dict())
 
-    sdb(aws, action, domain, merge(query, {"ItemName" => item}))
+    sdb(aws, action, domain, merge(query, Dict("ItemName" => item)))
 end
 
 

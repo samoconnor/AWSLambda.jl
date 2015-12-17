@@ -21,10 +21,10 @@ function sqs_get_queue(aws, name)
 
     @safe try
 
-        r = sqs(aws,"GetQueueUrl",{"QueueName" => name})
+        r = sqs(aws, Action="GetQueueUrl", QueueName = name)
 
         url = get(parse_xml(r.data), "GetQueueUrlResult")
-        return merge(aws, {"path" => URI(url).path})
+        return merge(aws, resource = URI(url).path)
 
     catch e
         @trap e if e.code == "AWS.SimpleQueueService.NonExistentQueue"
@@ -34,7 +34,7 @@ function sqs_get_queue(aws, name)
 end
 
 
-sqs_name(q) = split(q["path"], "/")[3]
+sqs_name(q) = split(q[:resource], "/")[3]
 sqs_arn(q) = arn(q, "sqs", sqs_name(q))
 
 
@@ -42,23 +42,25 @@ sqs_arn(q) = arn(q, "sqs", sqs_name(q))
 # options: VisibilityTimeout, MessageRetentionPeriod, DelaySeconds etc
 # See http://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_CreateQueue.html
 
-function sqs_create_queue(aws, name, options::Dict=Dict())
+function sqs_create_queue(aws, name; options...)
 
     println("""Creating SQS Queue "$name"...""")
 
-    attributes = Dict()
+    query = StrDict(
+        "Action" => "CreateQueue",
+        "QueueName" => name
+    )
     
-    for (i, k) in enumerate(keys(options))
-        push(attributes, ("Attribute.$i.Name", n))
-        push(attributes, ("Attribute.$i.Value", options[n]))
+    for (i, (k, v)) in enumerate(options)
+        query["Attribute.$i.Name"] = k
+        query["Attribute.$i.Value"] = v
     end
 
-    @with_retry_limit 4 try
+    @max_attempts 4 try
 
-        r = sqs(aws, "CreateQueue",
-                            merge(attributes, {"QueueName" => name}))
+        r = sqs(aws, query)
         url = get(parse_xml(r.data), "QueueUrl")
-        return merge(aws, {"path" => URI(url).path})
+        return merge(aws, resource = URI(url).path)
 
     catch e
 
@@ -86,7 +88,7 @@ function sqs_delete_queue(queue)
     @safe try
 
         println("Deleting SQS Queue $(aws["path"])")
-        sqs(aws, "DeleteQueue")
+        sqs(aws, Action="DeleteQueue")
 
     catch e
         @trap e if e.code == "AWS.SimpleQueueService.NonExistentQueue" end
@@ -96,26 +98,27 @@ end
 
 function sqs_send_message(queue, message)
 
-    sqs (queue, "SendMessage", {"MessageBody" => message,
-                                "MD5OfMessageBody" => string(md5_hash(message))})
+    sqs(queue, Action="SendMessage",
+               MessageBody = message,
+               MD5OfMessageBody = string(digest("md5", message)))
 end
 
 
 function sqs_send_message_batch(queue, messages)
 
-    batch = {}
+    batch = Dict()
     
     for (i, message) in enumerate(messages)
-        push(batch, ("SendMessageBatchRequestEntry.$i.Id",  i))
-        push(batch, ("SendMessageBatchRequestEntry.$i.MessageBody", message))
+        batch["SendMessageBatchRequestEntry.$i.Id"] = i
+        batch["SendMessageBatchRequestEntry.$i.MessageBody"] = message
     end
-    sqs(queue, "SendMessageBatch", batch)
+    sqs(queue, Action="SendMessageBatch", Attributes=batch)
 end
 
 
 function sqs_receive_message(queue)
 
-    r = sqs(queue, "ReceiveMessage", {"MaxNumberOfMessages" => "1"})
+    r = sqs(queue, Action="ReceiveMessage", MaxNumberOfMessages = "1")
     xdoc = parse_xml(r.data)
 
     handle = get(xdoc, "ReceiptHandle")
@@ -124,15 +127,15 @@ function sqs_receive_message(queue)
     end
 
     message = get(xdoc, "Body")
-    @assert get(xdoc, "MD5OfBody") == bytes2hex(md5_hash(message))
+    @assert get(xdoc, "MD5OfBody") == hexdigest("md5", message)
 
-    return {"message" => message, "handle" => handle}
+    @symdict(message, handle)
 end
     
 
 function sqs_delete_message(queue, message)
 
-    sqs(queue, "DeleteMessage", {"ReceiptHandle" => message["handle"]})
+    sqs(queue, Action="DeleteMessage", ReceiptHandle = message[:handle])
 end
 
 
@@ -148,7 +151,8 @@ function sqs_get_queue_attributes(queue)
 
     @safe try
 
-        r = sqs(queue, "GetQueueAttributes", {"AttributeName.1" => "All"})
+        r = sqs(queue, StrDict("Action" => "GetQueueAttributes",
+                               "AttributeName.1" => "All"))
 
         return dict(parse_xml(r.data), "GetQueueAttributesResult", "Attribute")
 
@@ -162,13 +166,13 @@ end
 
 function sqs_count(queue)
     
-    int(sqs_get_queue_attributes(queue)["ApproximateNumberOfMessages"])
+    parse(Int,sqs_get_queue_attributes(queue)["ApproximateNumberOfMessages"])
 end
 
 
 function sqs_busy_count(queue)
     
-    int(sqs_get_queue_attributes(queue)["ApproximateNumberOfMessagesNotVisible"])
+    parase(Int,sqs_get_queue_attributes(queue)["ApproximateNumberOfMessagesNotVisible"])
 end
 
 

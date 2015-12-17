@@ -12,16 +12,16 @@ export AWSException
 
 
 type AWSException <: Exception
-    code::String
-    message::String
+    code::AbstractString
+    message::AbstractString
     http::HTTPException
 end
 
 
 function show(io::IO,e::AWSException)
-    println(io, string (e.code,
-                        e.message == "" ? "" : (" -- " * e.message), "\n",
-                        e.http))
+    println(io, string(e.code,
+                       e.message == "" ? "" : (" -- " * e.message), "\n",
+                       e.http))
 end
 
 
@@ -39,7 +39,8 @@ function AWSException(e::HTTPException)
     end
 
     # Extract API error code from XML error message...
-    if content_type(e) in {"application/xml", "text/xml"}
+    if (content_type(e) in ["application/xml", "text/xml"]
+    &&  length(http_message(e)) > 0)
         xml = parse_xml(http_message(e))
         code = get(xml, "Code", code)
         message = get(xml, "Message", message)

@@ -9,10 +9,7 @@
 using OCAWS
 using Base.Test
 
-import Dates: format, DateTime, now
-
-import OCAWS: @safe, @trap, @with_retry_limit, @retry
-
+import OCAWS: @safe, @trap, @max_attempts, @retry
 
 
 #-------------------------------------------------------------------------------
@@ -22,20 +19,27 @@ import OCAWS: @safe, @trap, @with_retry_limit, @retry
 
 function aws4_request_headers_test()
 
-    r = AWSRequest()
-    r.aws = {
-        "access_key_id" => "AKIDEXAMPLE",
-        "secret_key"    => "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-        "region"        => "us-east-1",
-        "service"       => "iam"
-    }
-    r.url     = "http://iam.amazonaws.com/"
-    r.content = "Action=ListUsers&Version=2010-05-08"
-    r.headers = Dict()
+    r = symdict(
+        creds         = symdict(
+                        access_key_id = "AKIDEXAMPLE",
+                        secret_key = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+                        ),
+        region        = "us-east-1",
+        verb          = "POST",
+        service       = "iam",
+        url           = "http://iam.amazonaws.com/",
+        content       = "Action=ListUsers&Version=2010-05-08",
+        headers       = StrDict(
+                        "Content-Type" =>
+                        "application/x-www-form-urlencoded; charset=utf-8",
+                        "Host" => "iam.amazonaws.com"
+                        )
+    )
 
-    sign_aws_request!(r, DateTime("2011-09-09T23:36:00Z"))
+    sign!(r, DateTime("2011-09-09T23:36:00"))
 
-    out = join(["$k: $(r.headers[k])\n" for k in sort(collect(keys(r.headers)))])
+    h = r[:headers]
+    out = join(["$k: $(h[k])\n" for k in sort(collect(keys(h)))])
 
     expected = (
         "Authorization: AWS4-HMAC-SHA256 " *
@@ -55,7 +59,8 @@ function aws4_request_headers_test()
     @test out == expected
 end
 
-aws4_request_headers_test
+aws4_request_headers_test()
+println("AWS4 Signature OK.")
 
 
 
@@ -65,12 +70,15 @@ aws4_request_headers_test
 
 
 aws = readlines("jltest.aws")
-aws = {
-    "user_arn"      => strip(aws[1]),
-    "access_key_id" => strip(aws[2]),
-    "secret_key"    => strip(aws[3]),
-    "region"        => strip(aws[4]),
-}
+aws = symdict(
+    creds = symdict(
+        access_key_id = strip(aws[1]),
+        secret_key    = strip(aws[2]),
+    ),
+    region = strip(aws[3])
+)
+
+println(iam_whoami(aws))
 
 
 
@@ -136,7 +144,6 @@ iam_delte_user(aws, test_user)
 # S3 tests
 #-------------------------------------------------------------------------------
 
-
 # Delete old test files...
 
 for b in s3_list_buckets(aws)
@@ -151,10 +158,9 @@ for b in s3_list_buckets(aws)
     end
 end
 
-
 # Temporary bucket name...
 
-bucket_name = "ocaws.jl.test." * lowercase(format(now(),"yyyymmddTHHMMSSZ"))
+bucket_name = "ocaws.jl.test." * lowercase(Dates.format(now(Dates.UTC),"yyyymmddTHHMMSSZ"))
 
 
 # Test exception code for deleting non existand bucket...
@@ -171,11 +177,11 @@ end
 # Create bucket...
 
 s3_create_bucket(aws, bucket_name)
-sleep(5)
+#sleep(5)
 
 
 
-@with_retry_limit 4 try
+@max_attempts 4 try
 
     # Turn on object versioning for this bucket...
 
@@ -209,24 +215,24 @@ s3_put(aws, bucket_name, "key3", "data3.v1")
 s3_put(aws, bucket_name, "key3", "data3.v2")
 s3_put(aws, bucket_name, "key3", "data3.v3")
 
-@with_retry_limit 4 try
+@max_attempts 4 try
 
     # Check that test objects have expected content...
 
-    @test s3_get(aws, bucket_name, "key1") == "data1.v1"
-    @test s3_get(aws, bucket_name, "key2") == "data2.v1"
-    @test s3_get(aws, bucket_name, "key3") == "data3.v3"
+    @test s3_get(aws, bucket_name, "key1") == b"data1.v1"
+    @test s3_get(aws, bucket_name, "key2") == b"data2.v1"
+    @test s3_get(aws, bucket_name, "key3") == b"data3.v3"
 
     # Check object copy function...
 
     s3_copy(aws, bucket_name, "key1";
             to_bucket = bucket_name, to_path = "key1.copy")
 
-    @test s3_get(aws, bucket_name, "key1.copy") == "data1.v1"
+    @test s3_get(aws, bucket_name, "key1.copy") == b"data1.v1"
 
 catch e
 
-    if typeof(e) == AWSException && e.code in {"NoSuchKey", "NoSuchBucket"}
+    if typeof(e) == AWSException && e.code in ["NoSuchKey", "NoSuchBucket"]
         sleep(5)
         @retry
     end
@@ -235,12 +241,19 @@ end
 url = s3_sign_url(aws, bucket_name, "key1")
 @test readall(`curl -o - $url`) == "data1.v1"
 
+fn = "/tmp/jl_qws_test_key1"
+if isfile(fn)
+    rm(fn)
+end
+s3_get_file(aws, bucket_name, "key1", fn)
+@test readall(fn) == "data1.v1"
+rm(fn)
 
-@with_retry_limit 4 try
+@max_attempts 4 try
 
     # Check exists and list objects functions...
 
-    for key in {"key1", "key2", "key3", "key1.copy"} 
+    for key in ["key1", "key2", "key3", "key1.copy"]
         @test s3_exists(aws, bucket_name, key)
         @test key in [o["Key"] for o in s3_list_objects(aws, bucket_name)]
     end
@@ -264,16 +277,16 @@ end
 
 # Check versioned object content...
 
-@with_retry_limit 4 try
+@max_attempts 4 try
 
     versions = s3_list_versions(aws, bucket_name, "key3")
     @test length(versions) == 3
     @test (s3_get(aws, bucket_name, "key3"; version = versions[3]["VersionId"])
-          == "data3.v1")
+          == b"data3.v1")
     @test (s3_get(aws, bucket_name, "key3"; version = versions[2]["VersionId"])
-          == "data3.v2")
+          == b"data3.v2")
     @test (s3_get(aws, bucket_name, "key3"; version = versions[1]["VersionId"])
-          == "data3.v3")
+          == b"data3.v3")
 
 catch e
 
@@ -288,28 +301,26 @@ end
 s3_purge_versions(aws, bucket_name, "key3")
 versions = s3_list_versions(aws, bucket_name, "key3")
 @test length(versions) == 1
-@test s3_get(aws, bucket_name, "key3") == "data3.v3"
-
+@test s3_get(aws, bucket_name, "key3") == b"data3.v3"
 
 
 #-------------------------------------------------------------------------------
 # SQS tests
 #-------------------------------------------------------------------------------
 
-
-test_queue = "ocaws-jl-test-queue-" * lowercase(format(now(),"yyyymmddTHHMMSSZ"))
+test_queue = "ocaws-jl-test-queue-" * lowercase(Dates.format(now(Dates.UTC),"yyyymmddTHHMMSSZ"))
 
 qa = sqs_create_queue(aws, test_queue)
 
 qb = sqs_get_queue(aws, test_queue)
 
-@test qa["path"] == qb["path"]
+@test qa[:resource] == qb[:resource]
 
 
 sqs_send_message(qa, "Hello!")
 
 m = sqs_receive_message(qa)
-@test m["message"] == "Hello!"
+@test m[:message] == "Hello!"
 
 sqs_delete_message(qa, m)
 sqs_flush(qa)
@@ -325,16 +336,23 @@ info = sqs_get_queue_attributes(qa)
 #-------------------------------------------------------------------------------
 
 
-test_topic = "ocaws-jl-test-topic-" * lowercase(format(now(),"yyyymmddTHHMMSSZ"))
+test_topic = "ocaws-jl-test-topic-" * lowercase(Dates.format(now(Dates.UTC),"yyyymmddTHHMMSSZ"))
 
 sns_create_topic(aws, test_topic)
 
 sns_subscribe_sqs(aws, test_topic, qa; raw = true)
 
 sns_publish(aws, test_topic, "Hello SNS!")
-sleep(5)
-m = sqs_receive_message(qa)
-@test m["message"] == "Hello SNS!"
+
+@max_attempts 3 try
+
+    sleep(2)
+    m = sqs_receive_message(qa)
+    @test m[:message] == "Hello SNS!"
+
+catch e
+    @retry
+end
 
 
 

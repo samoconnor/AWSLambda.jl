@@ -7,7 +7,8 @@
 #==============================================================================#
 
 
-export iam_get_user, iam_get_role, iam_create_user, iam_create_access_key,
+export iam_whoami,
+       iam_get_user, iam_get_role, iam_create_user, iam_create_access_key,
        iam_delete_access_key, iam_delete_user, iam_put_user_policy,
        iam_format_policy
 
@@ -18,21 +19,28 @@ user_arn(aws, user_name) = arn(aws, "iam", "user/$user_name")
 
 function iam_get_user(aws, user_name)
 
-    r = iam(aws, "GetUser", {"UserName" => user_name})
+    r = iam(aws, Action = "GetUser", UserName = user_name)
     get(parse_xml(r.data), "User")
+end
+
+
+function iam_whoami(aws)
+
+    r = iam(aws, Action = "GetUser")
+    get(parse_xml(r.data), "Arn")
 end
 
 
 function iam_get_role(aws, role_name)
 
-    r = iam(aws, "GetRole", {"RoleName" => role_name})
+    r = iam(aws, "GetRole", Dict("RoleName" => role_name))
     get(parse_xml(r.data), "Role")
 end
 
 
 function iam_create_user(aws, user_name)
 
-    iam(aws, "CreateUser", {"UserName" => user_name})
+    iam(aws, "CreateUser", Dict("UserName" => user_name))
 
     iam_create_access_key(aws, user_name)
 end
@@ -40,53 +48,54 @@ end
 
 function iam_delete_access_key(aws, user_name)
 
-    r = iam(aws, "ListAccessKeys", {"UserName" => user_name})
+    r = iam(aws, "ListAccessKeys", Dict("UserName" => user_name))
     # ListAccessKeysResult AccessKeyMetadata] {
  #       set key [get $key AccessKeyId]
-    iam(aws, "DeleteAccessKey", {"UserName" => user_name, "AccessKeyId" => key})
+    iam(aws, "DeleteAccessKey", Dict("UserName" => user_name, "AccessKeyId" => key))
 end
 
 
 function iam_create_access_key(aws, user_name)
 
-    r = iam(aws, "CreateAccessKey", {"UserName" => user_name})
+    r = iam(aws, "CreateAccessKey", Dict("UserName" => user_name))
     r = parse_xml(r.data)
-    merge(aws, {"access_key_id" => get(r, "AccessKeyId"),
-                "secret_key" => get(r, "SecretAccessKey"),
-                "user_arn" => user_arn(aws, user_name)})
+    merge(aws, Dict("access_key_id" => get(r, "AccessKeyId"),
+                    "secret_key" => get(r, "SecretAccessKey"),
+                    "user_arn" => user_arn(aws, user_name)))
 end
 
 
 function iam_delete_user(aws, user_name)
 
-    r = iam(aws, "ListUserPolicies", {"UserName" => user_name})
+    r = iam(aws, "ListUserPolicies", Dict("UserName" => user_name))
 println(r.data)
 #    for {- policy} in 
 #                    ListUserPoliciesResult PolicyNames] {
-        iam(aws, "DeleteUserPolicy", {"UserName" => user_name,
-                                      "PolicyName" => policy})
+        iam(aws, "DeleteUserPolicy", Dict("UserName" => user_name,
+                                          "PolicyName" => policy))
 #    }
 
     iam_delete_access_key(aws, user_name)
 
-    r = iam(aws, "ListMFADevices", {"UserName" => user_name})
+    r = iam(aws, "ListMFADevices", Dict("UserName" => user_name))
 #    for {- key} in 
 #                    ListMFADevicesResult MFADevices] {
         sn = get(r, "SerialNumber")
-        iam(aws, "DeactivateMFADevice", {"UserName" => user_name,
-                                         "SerialNumber" => sn})
-        iam(aws, "DeleteVirtualMFADevice", {"SerialNumber" => sn})
+        iam(aws, "DeactivateMFADevice", Dict("UserName" => user_name,
+                                             "SerialNumber" => sn))
+        iam(aws, "DeleteVirtualMFADevice", Dict("SerialNumber" => sn))
 #    end
 
-    iam(aws, "DeleteUser" {"UserName" => user_name})
+    iam(aws, "DeleteUser", Dict("UserName" => user_name))
 end
 
 
 function iam_put_user_policy(aws, user_name, policy_name, policy)
 
-    iam(aws, "PutUserPolicy", {"UserName" => user_name,
-                               "PolicyName" => policy_name,
-                               "PolicyDocument" => iam_format_policy(policy)})
+    iam(aws, "PutUserPolicy",   
+             Dict("UserName" => user_name,
+                  "PolicyName" => policy_name,
+                  "PolicyDocument" => iam_format_policy(policy)))
 end
 
 

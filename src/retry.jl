@@ -11,7 +11,7 @@
 #
 # e.g.
 #
-#    @with_retry_limit 4 try 
+#    @max_attempts 4 try 
 #
 #        http_get(url)
 #
@@ -24,25 +24,32 @@
 #------------------------------------------------------------------------------#
 
 
-macro with_retry_limit(max::Integer, try_expr::Expr)
+macro max_attempts(max::Integer, try_expr::Expr)
 
     @assert string(try_expr.head) == "try"
 
     # Split try_expr into component parts...
     (try_block, exception, catch_block) = try_expr.args
 
-    # Insert a rethrow() at the end of the catch_block...
-    push!(catch_block.args, :($exception == nothing || rethrow($exception)))
-
     # Build retry expression...
     retry_expr = quote
 
         # Loop one less than "max" times...
-        for i in [1 : $max - 1]
+        for i in 1:($max - 1)
 
             # Execute the "try_expr"...
             # (It can "continue" if it wants to try again)
-            $(esc(try_expr))
+            try
+                $(esc(try_block))
+
+            catch $(esc(exception))
+
+                $(esc(catch_block))
+
+                if $(esc(exception)) != nothing
+                    rethrow($(esc(exception)))
+                end
+            end
 
             # Only get to here if "try_expr" executed cleanly...
             return
