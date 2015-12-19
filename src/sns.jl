@@ -14,7 +14,7 @@ export sns_delete_topic, sns_create_topic, sns_subscribe_sqs,
 sns_arn(aws, topic_name) = arn(aws, "sns", topic_name)
 
 
-sns(aws, query) = do_request(post(aws, "sns", "2010-03-31", query))
+sns(aws, query) = do_request(post_request(aws, "sns", "2010-03-31", query))
 
 
 function sns(aws, action, topic; args...)

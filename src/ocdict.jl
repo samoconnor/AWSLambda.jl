@@ -7,7 +7,10 @@
 #==============================================================================#
 
 
-import Base.merge
+import Base.merge, Base.get
+
+
+get(nothing::Void, key, default) = default
 
 
 # Merge new k,v pairs into dictionary...
@@ -64,6 +67,36 @@ end
 #   Dict(:a=>1,:b=>2,:c=>4,:d=>4)
 
 merge(d::SymDict; args...) = merge(d, SymDict(args))
+
+
+SymDict(d::Dict{AbstractString,Any}) = SymDict([symbol(k) => v for (k,v) in d])
+
+
+using ZipFile
+
+
+# Convert dictionarty to .ZIP data...
+
+function zipdict(d::Dict{AbstractString,Any})
+
+    io = IOBuffer()
+
+    w = ZipFile.Writer(io);
+    for (k,v) in d
+        f = ZipFile.addfile(w, k, method=ZipFile.Deflate)
+        write(f, v)
+        close(f)
+    end
+    close(w)
+
+    zip = takebuf_array(io)
+    close(io)
+
+    return zip
+end
+
+
+zipdict(args::Pair...) = zipdict(Dict{AbstractString,Any}(args))
 
 
 

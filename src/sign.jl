@@ -80,7 +80,7 @@ function sign_aws4!(r::AWSRequest, t)
     scope = join(scope, "/")
 
     # SHA256 hash of content...
-    content_hash = digest("sha256", r[:content]) |> bytes2hex
+    content_hash = hexdigest("sha256", r[:content])
 
     # HTTP headers...
     delete!(r[:headers], "Authorization")
@@ -109,11 +109,11 @@ function sign_aws4!(r::AWSRequest, t)
                             join(sort(canonical_headers), "\n"), "\n\n",
                             signed_headers, "\n",
                             content_hash)
-    canonical_hash = digest("sha256", canonical_form) |> bytes2hex
+    canonical_hash = hexdigest("sha256", canonical_form)
 
     # Create and sign "String to Sign"...
     string_to_sign = "AWS4-HMAC-SHA256\n$datetime\n$scope\n$canonical_hash"
-    signature = digest("sha256", signing_key, string_to_sign) |> bytes2hex
+    signature = hexdigest("sha256", signing_key, string_to_sign)
 
     # Append Authorization header...
     r[:headers]["Authorization"] = string(

@@ -24,7 +24,7 @@ end
 
 status(e::HTTPException) = e.response.status
 http_message(e::HTTPException) = bytestring(e.response.data)
-content_type(e::HTTPException) = e.response.headers["Content-Type"]
+content_type(e::HTTPException) = get(e.response.headers, "Content-Type", "")
 
 
 function show(io::IO,e::HTTPException)
@@ -37,18 +37,26 @@ end
 
 function http_attempt(request::Request, return_stream=false)
 
-#    println(request)
-#    println(bytestring(request.data))
+    println("$(request.method) $(request.uri)")
+    #println(bytestring(request.data))
 
-    # Do HTTP transaction...
+    # Start HTTP transaction...
     stream = open_stream(request)
+
+    # Send request data...
     if length(request.data) > 0
         write(stream, request.data)
     end
+
+    # Wait for response...
     stream = process_response(stream)
     response = stream.response
+    #println(response)
+
+    # Read result...
     if !return_stream
         response.data = readbytes(stream)
+        #println(bytestring(response.data))
     end
 
     # Return on success...
@@ -68,15 +76,16 @@ function http_request(request::Request, return_stream=false)
 
     delay = 0.05
 
-    @max_attempts 4 try 
+    @repeat 4 try 
 
         #println(request.uri)
         #println(request.headers)
-        #println(request.data)
+        #println(bytestring(request.data))
         return http_attempt(request, return_stream)
 
     catch e
 
+        # Try again (after delay) on network error...
         if (typeof(e) == UVError
         ||  typeof(e) == HTTPException && !(200 <= status(e) < 500))
 

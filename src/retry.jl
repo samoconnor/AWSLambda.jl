@@ -11,7 +11,7 @@
 #
 # e.g.
 #
-#    @max_attempts 4 try 
+#    @repeat 4 try 
 #
 #        http_get(url)
 #
@@ -24,7 +24,7 @@
 #------------------------------------------------------------------------------#
 
 
-macro max_attempts(max::Integer, try_expr::Expr)
+macro repeat(max::Integer, try_expr::Expr)
 
     @assert string(try_expr.head) == "try"
 
@@ -35,7 +35,7 @@ macro max_attempts(max::Integer, try_expr::Expr)
     retry_expr = quote
 
         # Loop one less than "max" times...
-        for i in 1:($max - 1)
+        for i in 1:$max
 
             # Execute the "try_expr"...
             # (It can "continue" if it wants to try again)
@@ -44,20 +44,19 @@ macro max_attempts(max::Integer, try_expr::Expr)
 
             catch $(esc(exception))
 
-                $(esc(catch_block))
+                # Dont' apply catch rules on last attempt...
+                if i < $max
+                    $(esc(catch_block))
+                end
 
                 if $(esc(exception)) != nothing
                     rethrow($(esc(exception)))
                 end
             end
 
-            # Only get to here if "try_expr" executed cleanly...
-            return
+            # No exception!
+            break
         end
-
-        # On the last of "max" attempts, execute the "try_block" naked
-        # so that exceptions get thrown up the stack...
-        $(esc(try_block))
     end
 end
 

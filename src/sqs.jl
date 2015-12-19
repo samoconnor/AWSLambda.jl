@@ -13,6 +13,14 @@ export sqs_get_queue, sqs_create_queue, sqs_delete_queue,
        sqs_busy_count
 
 
+sqs_name(q) = split(q[:resource], "/")[3]
+sqs_arn(q) = arn(q, "sqs", sqs_name(q))
+
+
+sqs(aws, query) = do_request(post_request(aws, "sqs", "2012-11-05", query))
+sqs(aws; args...) = sqs(aws, StrDict(args))
+
+
 # SQS Queue Lookup.
 # Find queue URL.
 # Return a revised "aws" dict that captures the URL path.
@@ -34,10 +42,6 @@ function sqs_get_queue(aws, name)
 end
 
 
-sqs_name(q) = split(q[:resource], "/")[3]
-sqs_arn(q) = arn(q, "sqs", sqs_name(q))
-
-
 # Create new queue with "name".
 # options: VisibilityTimeout, MessageRetentionPeriod, DelaySeconds etc
 # See http://docs.aws.amazon.com/AWSSimpleQueueService/latest/APIReference/API_CreateQueue.html
@@ -56,7 +60,7 @@ function sqs_create_queue(aws, name; options...)
         query["Attribute.$i.Value"] = v
     end
 
-    @max_attempts 4 try
+    @repeat 4 try
 
         r = sqs(aws, query)
         url = get(parse_xml(r.data), "QueueUrl")
@@ -122,11 +126,12 @@ function sqs_receive_message(queue)
     xdoc = parse_xml(r.data)
 
     handle = get(xdoc, "ReceiptHandle")
+    message = get(xdoc, "Body")
+
     if handle == ""
         return nothing
     end
 
-    message = get(xdoc, "Body")
     @assert get(xdoc, "MD5OfBody") == hexdigest("md5", message)
 
     @symdict(message, handle)

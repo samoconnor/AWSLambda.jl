@@ -6,19 +6,62 @@
 # Copyright Sam O'Connor 2014 - All rights reserved
 #==============================================================================#
 
-export s3_put, s3_get, s3_get_file, s3_exists, s3_delete, s3_copy,
+export s3_arn, s3_put, s3_get, s3_get_file, s3_exists, s3_delete, s3_copy,
        s3_create_bucket,
        s3_enable_versioning, s3_delete_bucket, s3_list_buckets,
        s3_list_objects, s3_list_versions, s3_get_meta, s3_purge_versions,
        s3_sign_url
 
 
+s3_arn(resource) = "arn:aws:s3:::$resource"
+s3_arn(bucket, path) = s3_arn("$bucket/$path")
+
+
+# S3 REST API request.
+
+function s3(aws, verb, bucket="";
+            headers=StrDict(),
+            path="",
+            query=StrDict(),
+            version="",
+            content="",
+            return_stream=false)
+
+    if version != ""
+        query["versionId"] = version
+    end
+    query = format_query_str(query)
+
+    resource = "/$path$(query == "" ? "" : "?$query")"
+    url = aws_endpoint("s3", aws[:region], bucket) * resource
+
+    r = merge(aws, @symdict(service = "s3",
+                            verb,
+                            url,
+                            resource,
+                            headers,
+                            content,
+                            return_stream))
+
+    do_request(r)
+end
+
+
 # See http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectGET.html
 
 function s3_get(aws, bucket, path; version="")
 
-    r = s3(aws, "GET", bucket; path = path, version = version)
-    return r.data
+    @repeat 3 try
+
+        r = s3(aws, "GET", bucket; path = path, version = version)
+        return r.data
+
+    catch e
+        @trap e if e.code in ["NoSuchBucket", "NoSuchKey"]
+            sleep(1)
+            @retry
+        end
+    end
 end
 
 
@@ -26,12 +69,12 @@ function s3_get_file(aws, bucket, path, filename; version="")
 
     stream = s3(aws, "GET", bucket; path = path,
                                     version = version,
-                                    return_stream=true)
+                                    return_stream = true)
 
     open(filename, "w") do file
         while !eof(stream)
             write(file, readavailable(stream))
-          end
+        end
     end
 end
 
@@ -40,7 +83,7 @@ function s3_get_meta(aws, bucket, path; version="")
 
     res = s3(aws, "GET", bucket;
              path = path,
-             headers = Dict("Range" => "bytes=0-0"),
+             headers = StrDict("Range" => "bytes=0-0"),
              version = version)
     return res.headers
 end
@@ -48,14 +91,18 @@ end
 
 function s3_exists(aws, bucket, path; version="")
 
-    @safe try
+    @repeat 3 try
 
         s3(aws, "GET", bucket; path = path,
-                               headers = Dict("Range" => "bytes=0-0"),
+                               headers = StrDict("Range" => "bytes=0-0"),
                                version = version)
         return true
 
     catch e
+        @trap e if e.code in ["NoSuchBucket"]
+            sleep(1)
+            @retry
+        end
         @trap e if e.code in ["NoSuchKey", "AccessDenied"]
             return false
         end
@@ -73,11 +120,11 @@ end
 
 # See http://docs.aws.amazon.com/AmazonS3/latest/API/RESTObjectCOPY.html
 
-function s3_copy(aws, bucket, path; to_bucket="", to_path="")
+function s3_copy(aws, bucket, path; to_bucket=bucket, to_path="")
 
     s3(aws, "PUT", to_bucket;
                    path = to_path,
-                   headers = Dict("x-amz-copy-source" => "/$bucket/$path"))
+                   headers = StrDict("x-amz-copy-source" => "/$bucket/$path"))
 end
 
  
@@ -96,7 +143,7 @@ function s3_create_bucket(aws, bucket)
         else
 
             s3(aws, "PUT", bucket;
-                headers = Dict("Content-Type" => "text/plain"),
+                headers = StrDict("Content-Type" => "text/plain"),
                 content = """
                 <CreateBucketConfiguration
                              xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
@@ -157,17 +204,27 @@ function s3_list_objects(aws, bucket, path = "")
             q["key-marker"] = marker
         end
 
-        r = s3(aws, "GET", bucket; query = q)
-        r = parse_xml(r.data)
-        more = get(r, "IsTruncated") == "true"
-        for e in get_elements_by_tagname(root(r), "Contents")
+        @repeat 3 try
 
-            o = Dict()
-            for field in ["Key", "LastModified", "ETag", "Size"]
-                o[field] = content(find_element(e, field))
+            r = s3(aws, "GET", bucket; query = q)
+            r = parse_xml(r.data)
+
+            more = get(r, "IsTruncated") == "true"
+            for e in get_elements_by_tagname(root(r), "Contents")
+
+                o = Dict()
+                for field in ["Key", "LastModified", "ETag", "Size"]
+                    o[field] = content(find_element(e, field))
+                end
+                push!(objects, o)
+                marker = o["Key"]
             end
-            push!(objects, o)
-            marker = o["Key"]
+
+        catch e
+            @trap e if e.code in ["NoSuchBucket"]
+                sleep(1)
+                @retry
+            end
         end
     end
 
@@ -211,6 +268,10 @@ function s3_list_versions(aws, bucket, path="")
 end
 
 
+import Base.ismatch
+ismatch(pattern::AbstractString,s::AbstractString) = ismatch(Regex(pattern), s)
+
+
 function s3_purge_versions(aws, bucket, path="", pattern="")
 
     for v in s3_list_versions(aws, bucket, path)
@@ -247,7 +308,7 @@ function s3_put(aws, bucket, path, data, data_type="")
 
     s3(aws, "PUT", bucket;
        path=path,
-       headers=Dict("Content-Type" => data_type),
+       headers=StrDict("Content-Type" => data_type),
        content=data)
 end
 
@@ -269,13 +330,12 @@ function s3_sign_url(aws, bucket, path, seconds = 3600)
     key = aws[:creds][:secret_key]
     query["Signature"] = digest("sha1", key, to_sign) |> base64encode |> strip
 
-    "$(s3_endpoint(aws[:region], bucket))/$path?$(format_query_str(query))"
+    endpoint=aws_endpoint("s3", aws[:region], bucket)
+    return "$endpoint/$path?$(format_query_str(query))"
 end
-
 
 
 
 #==============================================================================#
 # End of file.
 #==============================================================================#
-

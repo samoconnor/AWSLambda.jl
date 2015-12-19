@@ -17,6 +17,20 @@ role_arn(aws, role_name) = arn(aws, "iam", "role/$role_name")
 user_arn(aws, user_name) = arn(aws, "iam", "user/$user_name")
 
 
+function iam(aws; args...)
+
+    do_request(post_request(merge(aws, region = "us-east-1"),
+                            "iam", "2010-05-08", StrDict(args)))
+end
+
+
+function sts(aws; args...)
+
+    do_request(post_request(merge(aws, region = "us-east-1"),
+                            "iam", "2011-06-15", StrDict(args)))
+end
+
+
 function iam_get_user(aws, user_name)
 
     r = iam(aws, Action = "GetUser", UserName = user_name)

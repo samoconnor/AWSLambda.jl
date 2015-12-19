@@ -9,7 +9,7 @@
 using OCAWS
 using Base.Test
 
-import OCAWS: @safe, @trap, @max_attempts, @retry
+import OCAWS: @safe, @trap, @max_attempts, @retry, symdict, StrDict
 
 
 #-------------------------------------------------------------------------------
@@ -36,7 +36,7 @@ function aws4_request_headers_test()
                         )
     )
 
-    sign!(r, DateTime("2011-09-09T23:36:00"))
+    OCAWS.sign!(r, DateTime("2011-09-09T23:36:00"))
 
     h = r[:headers]
     out = join(["$k: $(h[k])\n" for k in sort(collect(keys(h)))])
@@ -60,7 +60,9 @@ function aws4_request_headers_test()
 end
 
 aws4_request_headers_test()
-println("AWS4 Signature OK.")
+
+
+println("AWS4 Signature ok.")
 
 
 
@@ -68,15 +70,23 @@ println("AWS4 Signature OK.")
 # Load credentials...
 #-------------------------------------------------------------------------------
 
+function read_creds(filename)
 
-aws = readlines("jltest.aws")
-aws = symdict(
-    creds = symdict(
-        access_key_id = strip(aws[1]),
-        secret_key    = strip(aws[2]),
-    ),
-    region = strip(aws[3])
-)
+    open(filename) do f
+
+        aws = readlines(f)
+
+        symdict(
+            creds = symdict(
+                access_key_id = strip(aws[1]),
+                secret_key    = strip(aws[2]),
+            ),
+            region = strip(aws[3])
+        )
+    end
+end
+
+aws = read_creds("jltest.aws")
 
 println(iam_whoami(aws))
 
@@ -98,13 +108,16 @@ println(iam_whoami(aws))
       "arn:aws:iam::1234:role/foo-role"
 
 
+println("ARNs ok.")
+
+
 
 #-------------------------------------------------------------------------------
 # Endpoint URL tests
 #-------------------------------------------------------------------------------
 
 
-import OCAWS: aws_endpoint, s3_endpoint
+import OCAWS: aws_endpoint
 
 
 @test aws_endpoint("sqs", "us-east-1") == "http://sqs.us-east-1.amazonaws.com"
@@ -116,9 +129,13 @@ import OCAWS: aws_endpoint, s3_endpoint
 @test aws_endpoint("sdb", "eu-west-1") == "http://sdb.eu-west-1.amazonaws.com"
 @test aws_endpoint("sns", "eu-west-1") == "http://sns.eu-west-1.amazonaws.com"
 
-@test s3_endpoint("us-east-1", "bucket") == "http://bucket.s3.amazonaws.com"
-@test s3_endpoint("eu-west-1", "bucket") ==
+@test aws_endpoint("s3", "us-east-1", "bucket") == 
+      "http://bucket.s3.amazonaws.com"
+@test aws_endpoint("s3", "eu-west-1", "bucket") ==
       "http://bucket.s3-eu-west-1.amazonaws.com"
+
+
+println("Endpoints ok.")
 
 
 
@@ -139,6 +156,15 @@ iam_delte_user(aws, test_user)
 =#
 
 
+#-------------------------------------------------------------------------------
+# SimpleDB tests
+#-------------------------------------------------------------------------------
+
+
+println(sdb_list_domains(aws))
+
+
+println("SDB ok.")
 
 #-------------------------------------------------------------------------------
 # S3 tests
@@ -215,86 +241,67 @@ s3_put(aws, bucket_name, "key3", "data3.v1")
 s3_put(aws, bucket_name, "key3", "data3.v2")
 s3_put(aws, bucket_name, "key3", "data3.v3")
 
-@max_attempts 4 try
+# Check that test objects have expected content...
 
-    # Check that test objects have expected content...
+@test s3_get(aws, bucket_name, "key1") == b"data1.v1"
+@test s3_get(aws, bucket_name, "key2") == b"data2.v1"
+@test s3_get(aws, bucket_name, "key3") == b"data3.v3"
 
-    @test s3_get(aws, bucket_name, "key1") == b"data1.v1"
-    @test s3_get(aws, bucket_name, "key2") == b"data2.v1"
-    @test s3_get(aws, bucket_name, "key3") == b"data3.v3"
+# Check object copy function...
 
-    # Check object copy function...
+s3_copy(aws, bucket_name, "key1";
+        to_bucket = bucket_name, to_path = "key1.copy")
 
-    s3_copy(aws, bucket_name, "key1";
-            to_bucket = bucket_name, to_path = "key1.copy")
+@test s3_get(aws, bucket_name, "key1.copy") == b"data1.v1"
 
-    @test s3_get(aws, bucket_name, "key1.copy") == b"data1.v1"
-
-catch e
-
-    if typeof(e) == AWSException && e.code in ["NoSuchKey", "NoSuchBucket"]
-        sleep(5)
-        @retry
-    end
-end
 
 url = s3_sign_url(aws, bucket_name, "key1")
-@test readall(`curl -o - $url`) == "data1.v1"
+@test readall(`curl -s -o - $url`) == "data1.v1"
 
 fn = "/tmp/jl_qws_test_key1"
 if isfile(fn)
     rm(fn)
 end
-s3_get_file(aws, bucket_name, "key1", fn)
+@max_attempts 3 try
+    s3_get_file(aws, bucket_name, "key1", fn)
+catch
+    sleep(1)
+    @retry
+end
 @test readall(fn) == "data1.v1"
 rm(fn)
 
-@max_attempts 4 try
 
-    # Check exists and list objects functions...
+# Check exists and list objects functions...
 
-    for key in ["key1", "key2", "key3", "key1.copy"]
-        @test s3_exists(aws, bucket_name, key)
-        @test key in [o["Key"] for o in s3_list_objects(aws, bucket_name)]
-    end
-
-    # Check delete...
-
-    s3_delete(aws, bucket_name, "key1.copy")
-
-    @test !("key1.copy" in [o["Key"] for o in s3_list_objects(aws, bucket_name)])
-
-    # Check metadata...
-
-    meta = s3_get_meta(aws, bucket_name, "key1")
-    @test meta["ETag"] == "\"68bc8898af64159b72f349b391a7ae35\""
-
-catch e
-    sleep(5)
-    @retry
+for key in ["key1", "key2", "key3", "key1.copy"]
+    @test s3_exists(aws, bucket_name, key)
+    @test key in [o["Key"] for o in s3_list_objects(aws, bucket_name)]
 end
+
+# Check delete...
+
+s3_delete(aws, bucket_name, "key1.copy")
+
+@test !("key1.copy" in [o["Key"] for o in s3_list_objects(aws, bucket_name)])
+
+# Check metadata...
+
+meta = s3_get_meta(aws, bucket_name, "key1")
+@test meta["ETag"] == "\"68bc8898af64159b72f349b391a7ae35\""
 
 
 # Check versioned object content...
 
-@max_attempts 4 try
+versions = s3_list_versions(aws, bucket_name, "key3")
+@test length(versions) == 3
+@test (s3_get(aws, bucket_name, "key3"; version = versions[3]["VersionId"])
+      == b"data3.v1")
+@test (s3_get(aws, bucket_name, "key3"; version = versions[2]["VersionId"])
+      == b"data3.v2")
+@test (s3_get(aws, bucket_name, "key3"; version = versions[1]["VersionId"])
+      == b"data3.v3")
 
-    versions = s3_list_versions(aws, bucket_name, "key3")
-    @test length(versions) == 3
-    @test (s3_get(aws, bucket_name, "key3"; version = versions[3]["VersionId"])
-          == b"data3.v1")
-    @test (s3_get(aws, bucket_name, "key3"; version = versions[2]["VersionId"])
-          == b"data3.v2")
-    @test (s3_get(aws, bucket_name, "key3"; version = versions[1]["VersionId"])
-          == b"data3.v3")
-
-catch e
-
-    if typeof(e) == AWSException && e.code == "NoSuchBucket"
-        sleep(1)
-        @retry
-    end
-end
 
 # Check pruning of old versions...
 
@@ -302,6 +309,10 @@ s3_purge_versions(aws, bucket_name, "key3")
 versions = s3_list_versions(aws, bucket_name, "key3")
 @test length(versions) == 1
 @test s3_get(aws, bucket_name, "key3") == b"data3.v3"
+
+
+println("S3 ok.")
+
 
 
 #-------------------------------------------------------------------------------
@@ -330,6 +341,9 @@ info = sqs_get_queue_attributes(qa)
 @test sqs_count(qa) == 0
 
 
+println("SQS ok.")
+
+
 
 #-------------------------------------------------------------------------------
 # SNS tests
@@ -344,23 +358,18 @@ sns_subscribe_sqs(aws, test_topic, qa; raw = true)
 
 sns_publish(aws, test_topic, "Hello SNS!")
 
-@max_attempts 3 try
+@max_attempts 5 try
 
     sleep(2)
     m = sqs_receive_message(qa)
-    @test m[:message] == "Hello SNS!"
+    @test m != nothing && m[:message] == "Hello SNS!"
 
 catch e
     @retry
 end
 
 
-
-#-------------------------------------------------------------------------------
-# SimpleDB tests
-#-------------------------------------------------------------------------------
-
-println(sdb_list_domains(aws))
+println("SNS ok.")
 
 
 
