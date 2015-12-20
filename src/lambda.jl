@@ -337,7 +337,6 @@ end
 # @lambda deploys an AWS Lambda that contains the body of the Julia function.
 # It then rewrites the local Julia function to call invocke_lambda().
 
-
 macro lambda(aws::Symbol, f::Expr)
 
     @assert f.head == :function
@@ -377,12 +376,10 @@ macro lambda(aws::Symbol, f::Expr)
 
     f.args[2] = quote
         jl_data = serialize64($(Expr(:tuple, args...)))
-        r = invoke_lambda($aws, $name, @symdict(jl_data))
+        r = invoke_lambda($aws, $name, Dict(:jl_data => jl_data))
         try 
             return deserialize64(r[:jl_data])
-        catch
         end
-
         return r
     end
 

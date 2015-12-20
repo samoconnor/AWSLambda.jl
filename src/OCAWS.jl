@@ -17,7 +17,25 @@ include("AWSException.jl")
 
 
 export sqs, sns, ec2, iam, sdb, s3,
-       AWSRequest
+       AWSConfig, aws_config, AWSRequest
+
+typealias AWSConfig SymDict
+
+function aws_config(;access_key_id=nothing,
+                     secret_key=nothing,
+                     region="us-east-1",
+                     args...)
+
+    config = SymDict(args)
+    config[:region] = region
+    if access_key_id != nothing
+        config[:creds] = @symdict(access_key_id, secret_key)
+    else
+        config[:creds] = SymDict()
+    end
+    return config
+end
+
 
 
 #------------------------------------------------------------------------------#
@@ -46,7 +64,7 @@ typealias AWSRequest SymDict
 #     :service  => "sdb"
 # )
 
-function post_request(aws::AWSRequest,
+function post_request(aws::AWSConfig,
                       service::ASCIIString,
                       version::ASCIIString,
                       query::StrDict)
@@ -83,7 +101,7 @@ include("sign.jl")
 function do_request(r::AWSRequest)
 
     # Try request 3 times to deal with possible Redirect and ExiredToken...
-    @repeat 3 try 
+    @repeat 3 try
 
         # Configure default headers...
         if !haskey(r, :headers)
@@ -92,12 +110,12 @@ function do_request(r::AWSRequest)
         r[:headers]["User-Agent"] = "JuliaAWS.jl/0.0.0"
         r[:headers]["Host"]       = URI(r[:url]).host
         if !haskey(r[:headers], "Content-Type") && r[:verb] == "POST"
-            r[:headers]["Content-Type"] = 
+            r[:headers]["Content-Type"] =
                 "application/x-www-form-urlencoded; charset=utf-8"
         end
 
         # Load local system credentials if needed...
-        if !haskey(r[:creds], :access_key_id)
+        if !haskey(r, :creds) || !haskey(r[:creds], :access_key_id)
             update_instance_credentials!(r[:creds])
         end
 
@@ -225,7 +243,7 @@ export localhost_is_ec2, ec2_metadata, ec2_get_instance_credentials
 ec2(aws; args...) = do_request(post(aws, "ec2", "2014-02-01", StrDict(args)))
 
 
-function localhost_is_ec2() 
+function localhost_is_ec2()
 
     if localhost_is_lambda()
         return false
@@ -250,7 +268,7 @@ function ec2_metadata(key)
 end
 
 
-function update_ec2_instance_credentials!(aws)
+function update_ec2_instance_credentials!(creds)
 
     @assert localhost_is_ec2()
 
@@ -258,13 +276,13 @@ function update_ec2_instance_credentials!(aws)
     info  = JSON.parse(info)
 
     name  = ec2_metadata("iam/security-credentials/")
-    creds = ec2_metadata("iam/security-credentials/$name")
-    creds = JSON.parse(creds)
+    new_creds = ec2_metadata("iam/security-credentials/$name")
+    new_creds = JSON.parse(new_creds)
 
-    aws[:access_key_id] = creds["AccessKeyId"]
-    aws[:secret_key]    = creds["SecretAccessKey"]
-    aws[:token]         = creds["Token"]
-    aws[:user_arn]      = info["InstanceProfileArn"]
+    creds[:access_key_id] = new_creds["AccessKeyId"]
+    creds[:secret_key]    = new_creds["SecretAccessKey"]
+    creds[:token]         = new_creds["Token"]
+    creds[:user_arn]      = info["InstanceProfileArn"]
 end
 
 
@@ -273,18 +291,30 @@ end
 # Lambda Metadata
 #------------------------------------------------------------------------------#
 
+using IniFile
 
 localhost_is_lambda() = haskey(ENV, "LAMBDA_TASK_ROOT")
 
 
-function update_instance_credentials!(aws)
+function update_instance_credentials!(creds)
 
     if localhost_is_ec2()
+
         update_ec2_instance_credentials!(aws)
-    else 
-        aws[:access_key_id] = ENV["AWS_ACCESS_KEY_ID"]
-        aws[:secret_key]    = ENV["AWS_SECRET_ACCESS_KEY"]
-        aws[:token]         = ENV["AWS_SESSION_TOKEN"]
+
+    elseif haskey(ENV, "AWS_ACCESS_KEY_ID")
+
+        creds[:access_key_id] = ENV["AWS_ACCESS_KEY_ID"]
+        creds[:secret_key]    = ENV["AWS_SECRET_ACCESS_KEY"]
+        creds[:token]         = ENV["AWS_SESSION_TOKEN"]
+
+    elseif isfile("$(ENV["HOME"])/.aws/credentials")
+
+        ini = read(Inifile(), "$(ENV["HOME"])/.aws/credentials")
+
+        creds[:access_key_id] = get(ini, "default", "aws_access_key_id")
+        creds[:secret_key]    = get(ini, "default", "aws_secret_access_key")
+        delete!(creds, :token)
     end
 end
 

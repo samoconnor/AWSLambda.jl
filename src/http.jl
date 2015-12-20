@@ -38,6 +38,7 @@ end
 function http_attempt(request::Request, return_stream=false)
 
     #println("$(request.method) $(request.uri)")
+    #println(request.headers)
     #println(bytestring(request.data))
 
     # Start HTTP transaction...
