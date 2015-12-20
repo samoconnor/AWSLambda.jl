@@ -14,7 +14,7 @@ using ZipFile
 
 
 export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
-       create_jl_lambda, @lambda, amap
+       create_jl_lambda, @lambda, amap, serialize64, deserialize64
 
 
 
@@ -116,11 +116,11 @@ end
 
 function show(io::IO, e::AWSLambdaException)
 
-    println(io, string("AWSLambdaException \"", e.name, "\": ", e.message, "\n"))
+    println(io, string("AWSLambdaException \"", e.name, "\":\n", e.message, "\n"))
 end
 
 
-function invoke_lambda(aws, name, args::SymDict)
+function invoke_lambda(aws, name, args)
 
     r = lambda(aws, "POST", path="$name/invocations", query=args)
 
@@ -260,25 +260,33 @@ function create_jl_lambda(aws, name, jl_code)
 
         # Set Julia package directory...
         root = os.environ['LAMBDA_TASK_ROOT']
-        os.environ['HOME'] = root
+        os.environ['HOME'] = '/tmp/'
         os.environ['JULIA_PKGDIR'] = root + "/julia"
 
-        # Pass event JSON to Julia command line...
-        try: 
-            print(subprocess.check_output([root + '/bin/julia',
-                                           root + "/$name.jl",
-                                           json.dumps(event),
-                                           '/tmp/lambda_out'],
-                                           stderr=subprocess.STDOUT))
-        except subprocess.CalledProcessError as e:
-            raise(Exception(e.output))
+        # Clean up old return value file...
+        if os.path.isfile('/tmp/lambda_out'):
+            os.remove('/tmp/lambda_out')
+
+        # Call Julia function...
+        proc = subprocess.Popen([root + '/bin/julia', root + "/$name.jl"],
+                                stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
+
+        # Pass JSON event data on stdin...
+        out, err = proc.communicate(json.dumps(event))
+        print(out)
+
+        # Check exit status...
+        if proc.poll() != 0:
+            raise Exception(out)
 
         # Return content of output file...
         if os.path.isfile('/tmp/lambda_out'):
             with open('/tmp/lambda_out', 'r') as f:
-                return f.read()
+                return {'jl_data': f.read()}
 
-        return ""
+        return {'stdout': out}
     """
 
     # Make a copy of base Julia system .ZIP file...
@@ -293,6 +301,21 @@ function create_jl_lambda(aws, name, jl_code)
                                        Description=new_code_hash)
 end
 
+
+function serialize64(a)
+
+    buf = IOBuffer()
+    b64 = Base64EncodePipe(buf)
+    serialize(b64, a)
+    close(b64)
+    takebuf_string(buf)
+end
+
+
+function deserialize64(a)
+
+    deserialize(Base64DecodePipe(IOBuffer(a)))
+end
 
 
 # Create an AWS Lambda function.
@@ -322,7 +345,7 @@ macro lambda(aws::Symbol, f::Expr)
     name = call.args[1]
     args = call.args[2:end]
 
-    call_f = "$name($(join(["get(_args,\"$a\",\"\")" for a in args], ", ")))"
+    get_args = join(["""get(args,"$a","")""" for a in args], ", ")
     body = string(eval(Expr(:quote,body)))
 
     jl_code =
@@ -333,23 +356,41 @@ macro lambda(aws::Symbol, f::Expr)
             $body
         end
 
-        _args = JSON.parse(ARGS[1])
+        args = JSON.parse(STDIN)
 
-        result = $call_f
+        out = open("/tmp/lambda_out", "w")
 
-        open(ARGS[2], "w") do file
-            write(file, result)
+        if haskey(args, "jl_data")
+
+            args = deserialize(Base64DecodePipe(IOBuffer(args["jl_data"])))
+            b64_out = Base64EncodePipe(out)
+            serialize(b64_out, $name(args...))
+            close(b64_out)
+
+        else
+
+            JSON.print(out, $name($get_args))
         end
+
+        close(out)
     """
 
-    f.args[2] = :(invoke_lambda($aws, $name, @symdict($(args...))))
+    f.args[2] = quote
+        jl_data = serialize64($(Expr(:tuple, args...)))
+        r = invoke_lambda($aws, $name, @symdict(jl_data))
+        try 
+            return deserialize64(r[:jl_data])
+        catch
+        end
+
+        return r
+    end
 
     quote
         create_jl_lambda($(esc(aws)), $(string(name)), $jl_code)
         $(esc(f))
     end
 end
-
 
 
 # Async version of map()
@@ -359,7 +400,6 @@ end
 #   f = @lambda aws function foo(n) "No. $n" end
 #
 #   amap(f, 1:100)
-
 
 function amap(f, l)
 
