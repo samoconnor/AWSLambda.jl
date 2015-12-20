@@ -14,7 +14,7 @@ using ZipFile
 
 
 export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
-       create_jl_lambda, @lambda
+       create_jl_lambda, @lambda, amap
 
 
 
@@ -73,7 +73,7 @@ function create_lambda(aws, name, S3Key;
                        Handler="$name.main",
                        Role=role_arn(aws, "lambda_s3_exec_role"),
                        Runtime="python2.7",
-                       Timeout=300,
+                       Timeout=30,
                        args...)
 
    query = merge!(SymDict(args),
@@ -105,9 +105,30 @@ function delete_lambda(aws, name)
 end
 
 
+export AWSLambdaException
+
+
+type AWSLambdaException <: Exception
+    name::AbstractString
+    message::AbstractString
+end
+
+
+function show(io::IO, e::AWSLambdaException)
+
+    println(io, string("AWSLambdaException \"", e.name, "\": ", e.message, "\n"))
+end
+
+
 function invoke_lambda(aws, name, args::SymDict)
 
-    lambda(aws, "POST", path="$name/invocations", query=args)
+    r = lambda(aws, "POST", path="$name/invocations", query=args)
+
+    if isa(r, Dict) && haskey(r, :errorMessage)
+        throw(AWSLambdaException(string(name), r[:errorMessage]))
+    end
+    
+    return r
 end
 
 
@@ -232,7 +253,6 @@ function create_jl_lambda(aws, name, jl_code)
     """
     from __future__ import print_function
     import subprocess
-    import commands
     import os
     import json
 
@@ -242,37 +262,20 @@ function create_jl_lambda(aws, name, jl_code)
         root = os.environ['LAMBDA_TASK_ROOT']
         os.environ['HOME'] = root
         os.environ['JULIA_PKGDIR'] = root + "/julia"
-        out_file='/tmp/lambda_out'
 
         # Pass event JSON to Julia command line...
-        command = [root + '/bin/julia',
-                   root + "/$name.jl",
-                   "'" + json.dumps(event) + "'",
-                   out_file]
-        print(' '.join(command))
-        print(commands.getstatusoutput(' '.join(command)))
-        #proc = subprocess.Popen(command,
-        #                        stdin=subprocess.PIPE,
-        #                        stdout=subprocess.PIPE,
-        #                        stderr=subprocess.STDOUT,
-        #                        shell=True)
-
-        # Log output of Julia command...
-        #while True:
-        #    line = proc.stdout.readline()
-        #    if len(line) == 0:
-        #        break
-        #    print(line, end='')
-
-        # Check exit status...
-        #retcode = proc.wait()
-        #if retcode != 0:
-        #    error = subprocess.CalledProcessError(retcode, command)
-        #    raise error
+        try: 
+            print(subprocess.check_output([root + '/bin/julia',
+                                           root + "/$name.jl",
+                                           json.dumps(event),
+                                           '/tmp/lambda_out'],
+                                           stderr=subprocess.STDOUT))
+        except subprocess.CalledProcessError as e:
+            raise(Exception(e.output))
 
         # Return content of output file...
-        if os.path.isfile(out_file):
-            with open(out_file, 'r') as f:
+        if os.path.isfile('/tmp/lambda_out'):
+            with open('/tmp/lambda_out', 'r') as f:
                 return f.read()
 
         return ""
@@ -286,7 +289,7 @@ function create_jl_lambda(aws, name, jl_code)
     update_lambda_zip(aws, zip_file, Dict("$name.py" => lambda_py_wrapper,
                                           "$name.jl" => jl_code))
     # Deploy the lambda to AWS...
-    create_lambda(aws, name, zip_file, MemorySize=512,
+    create_lambda(aws, name, zip_file, MemorySize=1024,
                                        Description=new_code_hash)
 end
 
@@ -346,6 +349,36 @@ macro lambda(aws::Symbol, f::Expr)
         $(esc(f))
     end
 end
+
+
+
+# Async version of map()
+#
+# e.g. Execute a lambda 100 times in parallel
+#
+#   f = @lambda aws function foo(n) "No. $n" end
+#
+#   amap(f, 1:100)
+
+
+function amap(f, l)
+
+    count = length(l)
+
+    results = Array{Any,1}(count)
+    fill!(results, nothing)
+
+    @sync begin
+        for (i,v) in enumerate(l)
+            @async begin
+                results[i] = f(v...)
+            end
+        end
+    end
+
+    return results
+end
+
 
 
 
