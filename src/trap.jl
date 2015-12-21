@@ -36,6 +36,8 @@ macro safe(try_expr::Expr)
 
     (try_block, exception, catch_block) = try_expr.args
 
+    @assert isa(exception, Symbol)
+
     # Build safe try expression...
     safe_try_expr = quote
         try

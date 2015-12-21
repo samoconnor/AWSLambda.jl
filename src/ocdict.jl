@@ -47,16 +47,43 @@ symdict(;args...) = SymDict(args)
 #   b = 2
 #   @symdict(a,b,c=3,d=4)
 #   Dict(:a=>1,:b=>2,:c=>4,:d=>4)
+#
+#   function f(a; args...)
+#       b = 2
+#       @symdict(a, b, c=3, d=0, args...)
+#   end
+#   f(1, d=4)
+#   Dict(:a=>1,:b=>2,:c=>4,:d=>4)
 
 macro symdict(args...)
 
     @assert !isa(args[1], Expr) || args[1].head != :tuple
 
-    args = [esc(isa(a, Expr) ? a : :($a=$a)) for a in args]
-    for i in 1:length(args)
-        args[i].args[1].head = :kw
+    # Check for "args..." at end...
+    extra = nothing
+    if isa(args[end], Expr) && args[end].head == symbol("...")
+        extra = :(SymDict($(args[end].args[1])))
+        args = args[1:end-1]
     end
-    :(symdict($(args...)))
+
+    # Ensure that all args are keyword arg Exprs...
+    new_args = []
+    for a in args
+        if !isa(a, Expr)
+            a = :($a=$a)
+        end
+        if !isa(a.args[1], Symbol)
+            a.args[1] = eval(:(symbol($(a.args[1]))))
+        end
+        a.head = :kw
+        push!(new_args, a)
+    end
+
+    if extra != nothing
+        :(merge!(symdict($(new_args...)), $extra))
+    else
+        :(symdict($(new_args...)))
+    end
 end
 
 

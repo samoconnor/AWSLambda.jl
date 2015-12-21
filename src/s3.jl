@@ -35,15 +35,14 @@ function s3(aws, verb, bucket="";
     resource = "/$path$(query == "" ? "" : "?$query")"
     url = aws_endpoint("s3", aws[:region], bucket) * resource
 
-    r = merge(aws, @symdict(service = "s3",
-                            verb,
-                            url,
-                            resource,
-                            headers,
-                            content,
-                            return_stream))
-
-    do_request(r)
+    do_request(@symdict(service = "s3",
+                        verb,
+                        url,
+                        resource,
+                        headers,
+                        content,
+                        return_stream,
+                        aws...))
 end
 
 

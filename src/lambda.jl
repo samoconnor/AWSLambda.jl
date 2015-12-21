@@ -27,13 +27,14 @@ function lambda(aws, verb; path="", query="")
 
     resource = "/2015-03-31/functions/$path"
 
-    r = merge(aws, @symdict(
+    r = @symdict(
         service  = "lambda",
         url      = aws_endpoint("lambda", aws[:region]) * resource,
         content  = query == "" ? "" : json(query),
         resource,
-        verb
-    ))
+        verb,
+        aws...
+    )
 
     r = do_request(r)
 
@@ -76,13 +77,13 @@ function create_lambda(aws, name, S3Key;
                        Timeout=30,
                        args...)
 
-   query = merge!(SymDict(args),
-                 @symdict(FunctionName = name,
-                          Code = @symdict(S3Key, S3Bucket),
-                          Handler,
-                          Role,
-                          Runtime,
-                          Timeout))
+   query = @symdict(FunctionName = name,
+                    Code = @symdict(S3Key, S3Bucket),
+                    Handler,
+                    Role,
+                    Runtime,
+                    Timeout,
+                    args...)
 
     lambda(aws, "POST", query=query)
 end
@@ -122,13 +123,25 @@ end
 
 function invoke_lambda(aws, name, args)
 
-    r = lambda(aws, "POST", path="$name/invocations", query=args)
+    @safe try
 
-    if isa(r, Dict) && haskey(r, :errorMessage)
-        throw(AWSLambdaException(string(name), r[:errorMessage]))
+        r = lambda(aws, "POST", path="$name/invocations", query=args)
+
+        if isa(r, Dict) && haskey(r, :errorMessage)
+            throw(AWSLambdaException(string(name), r[:errorMessage]))
+        end
+
+        return r
+
+    catch e
+        @trap e if e.code == "429"
+            message = "HTTP 429 $(e.message)\nSee " *
+                      "http://docs.aws.amazon.com/lambda/latest/dg/limits.html"
+            throw(AWSLambdaException(string(name), message))
+        end
     end
-    
-    return r
+
+    @assert false # Unreachable
 end
 
 
@@ -416,6 +429,137 @@ function amap(f, l)
     return results
 end
 
+
+
+#-------------------------------------------------------------------------------
+# Julia Runtime Build Script
+#-------------------------------------------------------------------------------
+
+
+# Build the Julia runtime using a temporary EC2 server.
+# Upload the Julia runtime to "aws[:lambda_bucket]/jl_lambda_base.zip".
+
+function create_jl_lambda_base(;pkg_list::Array{AbstractString,1}=["JSON"],
+                                release = "release-0.4")
+    server_config = [(
+
+        "cloud_config.txt", "text/cloud-config",
+
+        """packages:
+         - git
+         - cmake
+         - m4
+         - patch
+         - gcc
+         - gcc-c++
+         - gcc-gfortran
+         - libgfortran
+         - openssl-devel
+        """
+
+    ),( 
+
+        "build_julia.sh", "text/x-shellscript",
+
+        """#!/bin/bash
+
+        # Download Julia source code...
+        git clone git://github.com/JuliaLang/julia.git
+        cd julia
+        git checkout $release
+
+        # Configure Julia for the Xeon E5-2680 CPU used by AWS Lambda...
+        cp Make.inc Make.inc.orig
+        find='OPENBLAS_TARGET_ARCH=.*$'
+        repl='OPENBLAS_TARGET_ARCH=SANDYBRIDGE\nMARCH=core-avx-i'
+        sed s/\$find/\$repl/ < Make.inc.orig > Make.inc
+
+        # Set up /var/task Lambda staging dir...
+        mkdir -p /var/task/julia
+        export HOME=/var/task
+        export JULIA_PKGDIR=/var/task/julia
+
+        # Build and install Julia under /var/task...
+        make -j2 prefix= DESTDIR=/var/task all
+        make prefix= DESTDIR=/var/task install 
+        """
+
+    ),(
+
+        "precomplie_julia.jl", "text/x-shellscript",
+
+        """#!/var/task/bin/julia
+        Pkg.init()
+        $(join(["Pkg.add(\"$p\")\nusing $p\n" for p in pkg_list]))
+        """
+
+    ),(
+
+        "package_julia.sh", "text/x-shellscript",
+
+        """#!/bin/bash
+
+        # Copy minimal set of files to /task-staging...
+        mkdir -p /task-staging/bin
+        mkdir -p /task-staging/lib/julia
+        cd /task-staging
+        cp /var/task/bin/julia bin/
+        cp -a /var/task/lib/julia/*.so* lib/julia
+        rm -f lib/julia/*-debug.so
+        cp -a /usr/lib64/libgfortran.so* lib/julia
+        cp -a /usr/lib64/libquadmath.so* lib/julia
+
+        # Copy pre-compiled modules to /tmp/task...
+        cp -a /var/task/julia .
+        chmod -R a+r julia/lib/
+        find julia -name '.git' \
+                   -o -name '.cache' \
+                   -o -name '.travis.yml' \
+                   -o -name '.gitignore' \
+                   -o -name 'REQUIRE' \
+                   -o -name 'test' \
+                   -o -path '*/deps/downloads' \
+                   -o -path '*/deps/builds' \
+                   -o -path '*/deps/src' \
+                   -o -path '*/deps/usr/include' \
+                   -o -path '*/deps/usr/bin' \
+                   -o -path '*/deps/usr/lib/*.a' \
+                   -o -name 'doc' \
+                   -o -name '*.md' \
+                   -o -name 'METADATA' \
+            | xargs rm -rf
+
+        # Create .zip file...
+        zip -u --symlinks -r -9 /jl_lambda_base.zip *
+
+        # Upload .zip file to S3...
+        aws --region $(aws[:region]) \
+            s3 cp /jl_lambda_base.zip \
+                  s3://$(aws[:lambda_bucket])/jl_lambda_base.zip
+
+        # Suspend the build server...
+        shutdown -h now
+        """
+    )]
+
+    policy = """{
+        "Version": "2012-10-17",
+        "Statement": [ {
+            "Effect": "Allow",
+            "Action": "s3:PutObject",
+            "Resource": [
+                "arn:aws:s3:::$(aws[:lambda_bucket])/jl_lambda_base.zip",
+            ]
+        } ]
+    }"""
+
+    create_ec2(aws, "ocaws_jl_lambda_build_server",
+                    ImageId      = "ami-1ecae776",
+                    InstanceType = "c3.large",
+                    KeyName      = "ssh-ec2",
+                    UserData     = server_config
+                    Policy       = policy)
+end
 
 
 

@@ -73,7 +73,7 @@ function post_request(aws::AWSConfig,
     url = aws_endpoint(service, aws[:region]) * resource
     content = format_query_str(merge(query, "Version" => version))
 
-    merge(aws, @symdict(verb = "POST", service, resource, url, content))
+    @symdict(verb = "POST", service, resource, url, content, aws...)
 end
 
 
