@@ -10,13 +10,16 @@
 import LightXML: LightXML, XMLDocument, XMLElement, root, find_element, content,
                  get_elements_by_tagname, child_elements, name
 
-parse_xml(s::Array{UInt8,1}) = LightXML.parse_string(bytestring(s))
-parse_xml(s) = LightXML.parse_string(s)
+XML(s) = LightXML.parse_string(s)
+XML(r::Response) = XML(r.data)
+XML(s::Array{UInt8,1}) = XML(bytestring(s))
 
 
 import Base: get
 
-function get(e::XMLElement, name, default="")
+import Base.getindex
+
+function get(e::XMLElement, name, default=nothing)
 
     i = find_element(e, name)
     if i != nothing
@@ -34,7 +37,10 @@ function get(e::XMLElement, name, default="")
 end
 
 
-get(d::XMLDocument, name, default="") = get(root(d), name, default)
+get(d::XMLDocument, name, default=nothing) = get(root(d), name, default)
+
+getindex(e::XMLElement, name) = get(e, string(name))
+getindex(d::XMLDocument, name) = get(d, string(name))
 
 
 function list(xdoc::XMLDocument, list_tag, item_tag, subitem_tag="")

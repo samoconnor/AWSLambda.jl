@@ -31,6 +31,8 @@ macro repeat(max::Integer, try_expr::Expr)
     # Split try_expr into component parts...
     (try_block, exception, catch_block) = try_expr.args
 
+    @assert isa(exception, Symbol)
+
     # Build retry expression...
     retry_expr = quote
 

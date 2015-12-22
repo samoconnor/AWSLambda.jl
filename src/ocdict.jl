@@ -98,6 +98,8 @@ merge(d::SymDict; args...) = merge(d, SymDict(args))
 
 SymDict(d::Dict{AbstractString,Any}) = SymDict([symbol(k) => v for (k,v) in d])
 
+StrDict(d::SymDict) = StrDict([string(k) => v for (k,v) in d])
+
 
 using ZipFile
 

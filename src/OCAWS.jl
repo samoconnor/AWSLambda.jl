@@ -5,6 +5,9 @@
 #==============================================================================#
 
 
+#FIXME depends on URIParser.jl commit 2bc38088257df968e2b7a4e2e14cc8440bf341e1
+
+
 module OCAWS
 
 
@@ -73,7 +76,7 @@ function post_request(aws::AWSConfig,
     url = aws_endpoint(service, aws[:region]) * resource
     content = format_query_str(merge(query, "Version" => version))
 
-    @symdict(verb = "POST", service, resource, url, content, aws...)
+    @symdict(verb = "POST", service, resource, url, query, content, aws...)
 end
 
 
@@ -88,6 +91,15 @@ function http_request(r::AWSRequest, args...)
     http_request(Request(r), get(r, :return_stream, false))
 end
 
+
+function dump_aws_request(r::AWSRequest)
+
+    action = r[:verb]
+    if haskey(r, :query) && haskey(r[:query], "Action")
+        action = r[:query]["Action"]
+    end
+    println("$(r[:service]).$action $(r[:resource])")
+end
 
 
 #------------------------------------------------------------------------------#
@@ -121,6 +133,8 @@ function do_request(r::AWSRequest)
 
         # Use credentials to sign request...
         sign!(r)
+
+        dump_aws_request(r)
 
         return http_request(r)
 
@@ -330,6 +344,7 @@ include("sqs.jl")
 include("sns.jl")
 include("iam.jl")
 include("sdb.jl")
+include("ec2.jl")
 include("lambda.jl")
 
 

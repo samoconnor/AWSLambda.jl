@@ -14,7 +14,8 @@ using ZipFile
 
 
 export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
-       create_jl_lambda, @lambda, amap, serialize64, deserialize64
+       create_jl_lambda, @lambda, amap, serialize64, deserialize64,
+       create_jl_lambda_base
 
 
 
@@ -358,14 +359,13 @@ macro lambda(aws::Symbol, f::Expr)
     args = call.args[2:end]
 
     get_args = join(["""get(args,"$a","")""" for a in args], ", ")
-    body = string(eval(Expr(:quote,body)))
 
     jl_code =
     """
         using JSON
 
         function $call
-            $body
+            $(string(eval(Expr(:quote, body))))
         end
 
         args = JSON.parse(STDIN)
@@ -437,10 +437,11 @@ end
 
 
 # Build the Julia runtime using a temporary EC2 server.
+# Takes about 1 hour, (or about 5 minutes if full rebuild is not done).
 # Upload the Julia runtime to "aws[:lambda_bucket]/jl_lambda_base.zip".
 
-function create_jl_lambda_base(;pkg_list::Array{AbstractString,1}=["JSON"],
-                                release = "release-0.4")
+function create_jl_lambda_base(aws; pkg_list = ["JSON"],
+                                     release = "release-0.4")
     server_config = [(
 
         "cloud_config.txt", "text/cloud-config",
@@ -457,47 +458,54 @@ function create_jl_lambda_base(;pkg_list::Array{AbstractString,1}=["JSON"],
          - openssl-devel
         """
 
-    ),( 
+    ),(
 
         "build_julia.sh", "text/x-shellscript",
 
         """#!/bin/bash
-
-        # Download Julia source code...
-        git clone git://github.com/JuliaLang/julia.git
-        cd julia
-        git checkout $release
-
-        # Configure Julia for the Xeon E5-2680 CPU used by AWS Lambda...
-        cp Make.inc Make.inc.orig
-        find='OPENBLAS_TARGET_ARCH=.*$'
-        repl='OPENBLAS_TARGET_ARCH=SANDYBRIDGE\nMARCH=core-avx-i'
-        sed s/\$find/\$repl/ < Make.inc.orig > Make.inc
 
         # Set up /var/task Lambda staging dir...
         mkdir -p /var/task/julia
         export HOME=/var/task
         export JULIA_PKGDIR=/var/task/julia
 
-        # Build and install Julia under /var/task...
-        make -j2 prefix= DESTDIR=/var/task all
-        make prefix= DESTDIR=/var/task install 
-        """
+        cd /
+        if aws --region $(aws[:region]) \\
+            s3 cp s3://$(aws[:lambda_bucket])/jl_lambda_base.tgz \\
+                /jl_lambda_base.tgz
+        then
+            tar xzf jl_lambda_base.tgz
+        else
 
-    ),(
+            # Download Julia source code...
+            cd /
+            git clone git://github.com/JuliaLang/julia.git
+            cd julia
+            git checkout $release
 
-        "precomplie_julia.jl", "text/x-shellscript",
+            # Configure Julia for the Xeon E5-2680 CPU used by AWS Lambda...
+            cp Make.inc Make.inc.orig
+            find='OPENBLAS_TARGET_ARCH=.*\$'
+            repl='OPENBLAS_TARGET_ARCH=SANDYBRIDGE\\nMARCH=core-avx-i'
+            sed s/\$find/\$repl/ < Make.inc.orig > Make.inc
 
-        """#!/var/task/bin/julia
-        Pkg.init()
-        $(join(["Pkg.add(\"$p\")\nusing $p\n" for p in pkg_list]))
-        """
+            # Build and install Julia under /var/task...
+            make -j2 prefix= DESTDIR=/var/task all
+            make prefix= DESTDIR=/var/task install 
 
-    ),(
+            # Save tarball of raw Julia build...
+            cd /
+            tar czfP jl_lambda_base.tgz var/task
+            aws --region $(aws[:region]) \\
+                s3 cp /jl_lambda_base.tgz \\
+                      s3://$(aws[:lambda_bucket])/jl_lambda_base.tgz
+        fi
 
-        "package_julia.sh", "text/x-shellscript",
-
-        """#!/bin/bash
+        # Precompile Julia modules...
+        /var/task/bin/julia -e '
+            Pkg.init()
+            $(join(["Pkg.add(\"$p\")\nusing $p\n" for p in pkg_list]))
+        '
 
         # Copy minimal set of files to /task-staging...
         mkdir -p /task-staging/bin
@@ -512,29 +520,33 @@ function create_jl_lambda_base(;pkg_list::Array{AbstractString,1}=["JSON"],
         # Copy pre-compiled modules to /tmp/task...
         cp -a /var/task/julia .
         chmod -R a+r julia/lib/
-        find julia -name '.git' \
-                   -o -name '.cache' \
-                   -o -name '.travis.yml' \
-                   -o -name '.gitignore' \
-                   -o -name 'REQUIRE' \
-                   -o -name 'test' \
-                   -o -path '*/deps/downloads' \
-                   -o -path '*/deps/builds' \
-                   -o -path '*/deps/src' \
-                   -o -path '*/deps/usr/include' \
-                   -o -path '*/deps/usr/bin' \
-                   -o -path '*/deps/usr/lib/*.a' \
-                   -o -name 'doc' \
-                   -o -name '*.md' \
-                   -o -name 'METADATA' \
+        find julia -name '.git' \\
+                   -o -name '.cache' \\
+                   -o -name '.travis.yml' \\
+                   -o -name '.gitignore' \\
+                   -o -name 'REQUIRE' \\
+                   -o -name 'test' \\
+                   -o -path '*/deps/downloads' \\
+                   -o -path '*/deps/builds' \\
+                   -o \\( \\
+                        -type f \\
+                        -path '*/deps/src/*' \\
+                      ! -name '*.so.*' \\
+                    \\) \\
+                   -o -path '*/deps/usr/include' \\
+                   -o -path '*/deps/usr/bin' \\
+                   -o -path '*/deps/usr/lib/*.a' \\
+                   -o -name 'doc' \\
+                   -o -name '*.md' \\
+                   -o -name 'METADATA' \\
             | xargs rm -rf
 
         # Create .zip file...
         zip -u --symlinks -r -9 /jl_lambda_base.zip *
 
         # Upload .zip file to S3...
-        aws --region $(aws[:region]) \
-            s3 cp /jl_lambda_base.zip \
+        aws --region $(aws[:region]) \\
+            s3 cp /jl_lambda_base.zip \\
                   s3://$(aws[:lambda_bucket])/jl_lambda_base.zip
 
         # Suspend the build server...
@@ -546,9 +558,9 @@ function create_jl_lambda_base(;pkg_list::Array{AbstractString,1}=["JSON"],
         "Version": "2012-10-17",
         "Statement": [ {
             "Effect": "Allow",
-            "Action": "s3:PutObject",
+            "Action": [ "s3:PutObject", "s3:GetObject" ],
             "Resource": [
-                "arn:aws:s3:::$(aws[:lambda_bucket])/jl_lambda_base.zip",
+                "arn:aws:s3:::$(aws[:lambda_bucket])/jl_lambda_base.*"
             ]
         } ]
     }"""
@@ -557,7 +569,7 @@ function create_jl_lambda_base(;pkg_list::Array{AbstractString,1}=["JSON"],
                     ImageId      = "ami-1ecae776",
                     InstanceType = "c3.large",
                     KeyName      = "ssh-ec2",
-                    UserData     = server_config
+                    UserData     = server_config,
                     Policy       = policy)
 end
 

@@ -179,8 +179,7 @@ s3_delete_bucket(aws, bucket) = s3(aws, "DELETE", bucket)
 function s3_list_buckets(aws)
 
     r = s3(aws,"GET")
-    r = parse_xml(r.data)
-    list(r, "Buckets", "Bucket", "Name")
+    list(XML(r), "Buckets", "Bucket", "Name")
 end
 
 
@@ -206,9 +205,9 @@ function s3_list_objects(aws, bucket, path = "")
         @repeat 3 try
 
             r = s3(aws, "GET", bucket; query = q)
-            r = parse_xml(r.data)
+            r = XML(r)
 
-            more = get(r, "IsTruncated") == "true"
+            more = r[:IsTruncated] == "true"
             for e in get_elements_by_tagname(root(r), "Contents")
 
                 o = Dict()
@@ -247,8 +246,8 @@ function s3_list_versions(aws, bucket, path="")
         end
 
         r = s3(aws, "GET", bucket; query = query)
-        r = parse_xml(r.data)
-        more = get(r, "IsTruncated") == "true"
+        r = XML(r)
+        more = r[:IsTruncated] == "true"
 
         for e in child_elements(root(r))
 

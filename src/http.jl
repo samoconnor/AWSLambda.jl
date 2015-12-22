@@ -9,7 +9,7 @@
 
 import URIParser: URI, query_params
 import Requests: format_query_str, process_response, open_stream, BodyDone
-import HttpCommon: Request, STATUS_CODES
+import HttpCommon: Request, Response, STATUS_CODES
 import Base: show, UVError
 
 
@@ -20,6 +20,8 @@ type HTTPException <: Exception
     request
     response
 end
+
+const http_debug = false
 
 
 status(e::HTTPException) = e.response.status
@@ -37,9 +39,11 @@ end
 
 function http_attempt(request::Request, return_stream=false)
 
-    #println("$(request.method) $(request.uri)")
-    #println(request.headers)
-    #println(bytestring(request.data))
+    if http_debug
+        println("$(request.method) $(request.uri)")
+        dump(request.headers)
+        println(bytestring(request.data))
+    end
 
     # Start HTTP transaction...
     stream = open_stream(request)
@@ -52,12 +56,16 @@ function http_attempt(request::Request, return_stream=false)
     # Wait for response...
     stream = process_response(stream)
     response = stream.response
-    #println(response)
 
     # Read result...
     if !return_stream
         response.data = readbytes(stream)
-        #println(bytestring(response.data))
+
+        if http_debug
+            println(response.status)
+            dump(response.headers)
+            println(bytestring(response.data))
+        end
     end
 
     # Return on success...
@@ -79,9 +87,6 @@ function http_request(request::Request, return_stream=false)
 
     @repeat 4 try 
 
-        #println(request.uri)
-        #println(request.headers)
-        #println(bytestring(request.data))
         return http_attempt(request, return_stream)
 
     catch e

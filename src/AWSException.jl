@@ -47,14 +47,13 @@ function AWSException(e::HTTPException)
     end
 
     # Extract API error code from XML error message...
-    if (content_type(e) in ["application/xml", "text/xml"]
+    if (content_type(e) in ["", "application/xml", "text/xml"]
     &&  length(http_message(e)) > 0)
-        xml = parse_xml(http_message(e))
+        xml = XML(http_message(e))
         code = get(xml, "Code", code)
         message = get(xml, "Message", message)
     end
 
-    
     AWSException(code, message, e)
 end
 

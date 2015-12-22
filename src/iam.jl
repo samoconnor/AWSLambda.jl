@@ -19,8 +19,16 @@ user_arn(aws, user_name) = arn(aws, "iam", "user/$user_name")
 
 function iam(aws; args...)
 
-    do_request(post_request(merge(aws, region = "us-east-1"),
-                            "iam", "2010-05-08", StrDict(args)))
+    @repeat 3 try
+
+        return do_request(post_request(merge(aws, region = "us-east-1"),
+                                       "iam", "2010-05-08", StrDict(args)))
+    catch e
+        @trap e if e.code == "NoSuchEntity"
+            sleep(1)
+            @retry
+        end
+    end
 end
 
 
@@ -34,21 +42,21 @@ end
 function iam_get_user(aws, user_name)
 
     r = iam(aws, Action = "GetUser", UserName = user_name)
-    get(parse_xml(r.data), "User")
+    XML(r)[:User]
 end
 
 
 function iam_whoami(aws)
 
     r = iam(aws, Action = "GetUser")
-    get(parse_xml(r.data), "Arn")
+    XML(r)[:Arn]
 end
 
 
 function iam_get_role(aws, role_name)
 
     r = iam(aws, "GetRole", Dict("RoleName" => role_name))
-    get(parse_xml(r.data), "Role")
+    XML(r)[:Role]
 end
 
 
@@ -72,9 +80,9 @@ end
 function iam_create_access_key(aws, user_name)
 
     r = iam(aws, "CreateAccessKey", Dict("UserName" => user_name))
-    r = parse_xml(r.data)
-    merge(aws, Dict("access_key_id" => get(r, "AccessKeyId"),
-                    "secret_key" => get(r, "SecretAccessKey"),
+    r = XML(r)
+    merge(aws, Dict("access_key_id" => r[:AccessKeyId],
+                    "secret_key" => r[:SecretAccessKey],
                     "user_arn" => user_arn(aws, user_name)))
 end
 
@@ -117,6 +125,29 @@ function iam_format_policy(policy_statement)
 
 #    json [dict create Version 2012-10-17 Statement $policy_statement]
 end
+
+
+function iam_create_role(aws, name; path="/")
+
+    policy = """{
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Principal": {
+            "Service": "ec2.amazonaws.com"
+          },
+          "Action": "sts:AssumeRole"
+        }
+      ]
+    }"""
+
+    r = iam(aws, Action = "CreateRole",
+                 AssumeRolePolicyDocument = policy,
+                 Path = path,
+                 RoleName = name)
+end
+
 
 #=
 

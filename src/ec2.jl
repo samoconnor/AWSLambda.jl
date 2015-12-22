@@ -7,14 +7,14 @@
 #==============================================================================#
 
 
-export 
+export ec2
 
 include("mime.jl")
 
 
-function ec2(aws; query)
+function ec2(aws, query)
 
-    do_request(post_request(aws, "ec2", "2014-02-01", query))
+    do_request(post_request(aws, "ec2", "2014-02-01", StrDict(query)))
 end
 
 
@@ -25,8 +25,8 @@ function ec2_id(aws, name)
                           "Filter.1.Value.1" = "Name",
                           "Filter.2.Name"    = "value",
                           "Filter.2.Value.1" = name))
-    println(r)
-    exir(0)
+
+    XML(r)[:resourceId]
 end
 
 
@@ -35,8 +35,8 @@ function create_ec2(aws, name; ImageId="ami-1ecae776",
                                Policy="",
                                args...)
 
-    if isa(UserData,Array{Tuple,1})
-        UserData=mime_multipart(UserData)
+    if isa(UserData,Array)
+        UserData=base64encode(mime_multipart(UserData))
     end
 
     # Delete old instance...
@@ -44,60 +44,94 @@ function create_ec2(aws, name; ImageId="ami-1ecae776",
     if old_id != nothing
 
         ec2(aws, @symdict(Action = "DeleteTags", 
-                          "ResourceId.1" = old_id
+                          "ResourceId.1" = old_id,
                           "Tag.1.Key" = "Name"))
 
         ec2(aws, @symdict(Action = "TerminateInstances", 
                           "InstanceId.1" = old_id))
     end
-    
+
+    request = @symdict(Action="RunInstances",
+                       ImageId,
+                       UserData,
+                       MinCount="1",
+                       MaxCount="1",
+                       args...)
+
     # Set up InstanceProfile Policy...
     if Policy != ""
 
-        iam(aws, Action = "CreateRole",
-                 Path = "/",
-                 RoleName = name,
-                 AssumeRolePolicyDocument = """{
-                    "Version": "2012-10-17",
-                    "Statement": [ {
-                        "Effect": "Allow",
-                        "Principal": {
-                            "Service": "ec2.amazonaws.com"
-                        },
-                        "Action": "sts:AssumeRole"
-                    } ]
-                 }""")
+        @safe try 
+
+            iam(aws, Action = "CreateRole",
+                     Path = "/",
+                     RoleName = name,
+                     AssumeRolePolicyDocument = """{
+                        "Version": "2012-10-17",
+                        "Statement": [ {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "ec2.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        } ]
+                     }""")
+
+        catch e
+            @trap e if e.code == "EntityAlreadyExists" end
+        end
 
         iam(aws, Action = "PutRolePolicy",
-                 RoleName = "$name-role",
-                 PolicyName = "$name-policy",
+                 RoleName = name,
+                 PolicyName = name,
                  PolicyDocument = Policy)
 
-        iam(aws, Action = "CreateInstanceProfile",
-                 InstanceProfileName = "$name-role",
-                 Path = "/")
+        @safe try 
 
-        iam(aws, Action = "AddRoleToInstanceProfile",
-                 InstanceProfileName = "$name-role",
-                 RoleName = "$name-role")
+            iam(aws, Action = "CreateInstanceProfile",
+                     InstanceProfileName = name,
+                     Path = "/")
+        catch e
+            @trap e if e.code == "EntityAlreadyExists" end
+        end
+
+
+        @repeat 2 try 
+
+            iam(aws, Action = "AddRoleToInstanceProfile",
+                     InstanceProfileName = name,
+                     RoleName = name)
+
+        catch e
+            @trap e if e.code == "LimitExceeded"
+                iam(aws, Action = "RemoveRoleFromInstanceProfile",
+                         InstanceProfileName = name,
+                         RoleName = name)
+                @retry
+            end
+        end
+
+        request[symbol("IamInstanceProfile.Name")] = name
     end
 
-    # Deploy instance...
-    r = ec2(aws, @symdict(Action="RunInstances",
-                          ImageID,
-                          UserData,
-                          "IamInstanceProfile.Name" = "$name-role",
-                          MinCount=1,
-                          MaxCount=1,
-                          args...))
+    r = nothing
 
-    println(r)
-exit(0)
-#FIXME     
-#    dset ec2 id [get $response instancesSet item instanceId]
+    @repeat 3 try
+
+        # Deploy instance...
+        r = ec2(aws, request)
+
+    catch e
+        @trap e if e.code == "InvalidParameterValue"
+            sleep(2)
+            @retry
+        end
+    end
+
+    r = XML(r)
 
     ec2(aws, StrDict("Action"       => "CreateTags",
-                     "ResourceId.1" => r[:id],
+                     "ResourceId.1" => r[:instanceId],
                      "Tag.1.Key"    => "Name",
                      "Tag.1.Value"  => name))
 

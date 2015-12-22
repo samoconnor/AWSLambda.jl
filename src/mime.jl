@@ -1,4 +1,4 @@
-function mime_multipart(parts::Array{Tuple{Any,Any,Any},1})
+function mime_multipart(parts::Array)
 
     boundary = "=PRZLn8Nm1I82df0Dtj4ZvJi="
 
@@ -10,7 +10,7 @@ function mime_multipart(parts::Array{Tuple{Any,Any,Any},1})
     --$boundary
     """
 
-    for (filename, content_type, content) in d
+    for (filename, content_type, content) in parts
 
         mime *=
         """
