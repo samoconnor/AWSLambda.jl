@@ -27,7 +27,7 @@ end
 
 function AWSException(e::HTTPException)
 
-    code = string(status(e))
+    code = string(http_status(e))
     message = "AWSException"
 
     # Extract API error code from Lambda-style JSON error message...

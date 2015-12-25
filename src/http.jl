@@ -24,7 +24,8 @@ end
 const http_debug = false
 
 
-status(e::HTTPException) = e.response.status
+http_status(e::HTTPException) = e.response.status
+headers(e::HTTPException) = e.response.headers
 http_message(e::HTTPException) = bytestring(e.response.data)
 content_type(e::HTTPException) = get(e.response.headers, "Content-Type", "")
 
@@ -81,25 +82,16 @@ end
 
 function http_request(request::Request, return_stream=false)
 
-    request.headers["Content-Length"] = length(request.data) |> string
-
-    delay = 0.05
+    request.headers["Content-Length"] = string(length(request.data))
 
     @repeat 4 try 
 
         return http_attempt(request, return_stream)
 
     catch e
-
-        # Try again (after delay) on network error...
-        if (typeof(e) == UVError
-        ||  typeof(e) == HTTPException && !(200 <= status(e) < 500))
-
-            sleep(delay * (0.8 + (0.4 * rand())))
-            delay *= 10
-
-            @retry
-        end
+        @delay_retry if typeof(e) == UVError end
+        @delay_retry if http_status(e) < 200 &&
+                        http_status(e) >= 500 end
     end
 
     assert(false) # Unreachable.

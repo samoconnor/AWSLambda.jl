@@ -1,4 +1,3 @@
-#!/Applications/Julia-0.3.0-rc4.app/Contents/Resources/julia/bin/julia
 #==============================================================================#
 # OCAWS/test/runtests.jl
 #
@@ -9,7 +8,8 @@
 using OCAWS
 using Base.Test
 
-import OCAWS: @safe, @trap, @max_attempts, @retry, symdict, StrDict
+import OCAWS: @repeat, @protected, symdict, StrDict
+
 
 
 #-------------------------------------------------------------------------------
@@ -70,23 +70,7 @@ println("AWS4 Signature ok.")
 # Load credentials...
 #-------------------------------------------------------------------------------
 
-function read_creds(filename)
-
-    open(filename) do f
-
-        aws = readlines(f)
-
-        symdict(
-            creds = symdict(
-                access_key_id = strip(aws[1]),
-                secret_key    = strip(aws[2]),
-            ),
-            region = strip(aws[3])
-        )
-    end
-end
-
-aws = read_creds("jltest.aws")
+aws = aws_config(region = "ap-southeast-2", lambda_bucket = "ocaws.jl.lambdatest")
 
 println(iam_whoami(aws))
 
@@ -191,12 +175,12 @@ bucket_name = "ocaws.jl.test." * lowercase(Dates.format(now(Dates.UTC),"yyyymmdd
 
 # Test exception code for deleting non existand bucket...
 
-@safe try
+@protected try
 
     s3_delete_bucket(aws, bucket_name)
 
 catch e
-     @trap e if e.code == "NoSuchBucket" end
+     @ignore if e.code == "NoSuchBucket" end
 end
 
 
@@ -207,7 +191,7 @@ s3_create_bucket(aws, bucket_name)
 
 
 
-@max_attempts 4 try
+@repeat 4 try
 
     # Turn on object versioning for this bucket...
 
@@ -226,10 +210,7 @@ s3_create_bucket(aws, bucket_name)
 
 catch e
 
-    if typeof(e) == AWSException && e.code == "NoSuchBucket"
-        sleep(1)
-        @retry
-    end
+    @delay_retry if e.code == "NoSuchBucket" end
 end
 
 
@@ -262,11 +243,11 @@ fn = "/tmp/jl_qws_test_key1"
 if isfile(fn)
     rm(fn)
 end
-@max_attempts 3 try
+@repeat 3 try
     s3_get_file(aws, bucket_name, "key1", fn)
-catch
+catch e
     sleep(1)
-    @retry
+    @retry if true end
 end
 @test readall(fn) == "data1.v1"
 rm(fn)
@@ -358,14 +339,14 @@ sns_subscribe_sqs(aws, test_topic, qa; raw = true)
 
 sns_publish(aws, test_topic, "Hello SNS!")
 
-@max_attempts 5 try
+@repeat 5 try
 
     sleep(2)
     m = sqs_receive_message(qa)
     @test m != nothing && m[:message] == "Hello SNS!"
 
 catch e
-    @retry
+    @retry if true end
 end
 
 

@@ -61,7 +61,7 @@ function create_ec2(aws, name; ImageId="ami-1ecae776",
     # Set up InstanceProfile Policy...
     if Policy != ""
 
-        @safe try 
+        @protected try 
 
             iam(aws, Action = "CreateRole",
                      Path = "/",
@@ -78,7 +78,7 @@ function create_ec2(aws, name; ImageId="ami-1ecae776",
                      }""")
 
         catch e
-            @trap e if e.code == "EntityAlreadyExists" end
+            @ignore if e.code == "EntityAlreadyExists" end
         end
 
         iam(aws, Action = "PutRolePolicy",
@@ -86,13 +86,13 @@ function create_ec2(aws, name; ImageId="ami-1ecae776",
                  PolicyName = name,
                  PolicyDocument = Policy)
 
-        @safe try 
+        @protected try 
 
             iam(aws, Action = "CreateInstanceProfile",
                      InstanceProfileName = name,
                      Path = "/")
         catch e
-            @trap e if e.code == "EntityAlreadyExists" end
+            @ignore if e.code == "EntityAlreadyExists" end
         end
 
 
@@ -103,11 +103,10 @@ function create_ec2(aws, name; ImageId="ami-1ecae776",
                      RoleName = name)
 
         catch e
-            @trap e if e.code == "LimitExceeded"
+            @retry if e.code == "LimitExceeded"
                 iam(aws, Action = "RemoveRoleFromInstanceProfile",
                          InstanceProfileName = name,
                          RoleName = name)
-                @retry
             end
         end
 
@@ -116,16 +115,13 @@ function create_ec2(aws, name; ImageId="ami-1ecae776",
 
     r = nothing
 
-    @repeat 3 try
+    @repeat 4 try
 
         # Deploy instance...
         r = ec2(aws, request)
 
     catch e
-        @trap e if e.code == "InvalidParameterValue"
-            sleep(2)
-            @retry
-        end
+        @delay_retry if e.code == "InvalidParameterValue" end
     end
 
     r = XML(r)

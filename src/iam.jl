@@ -19,15 +19,13 @@ user_arn(aws, user_name) = arn(aws, "iam", "user/$user_name")
 
 function iam(aws; args...)
 
-    @repeat 3 try
+    @repeat 4 try
 
         return do_request(post_request(merge(aws, region = "us-east-1"),
                                        "iam", "2010-05-08", StrDict(args)))
+
     catch e
-        @trap e if e.code == "NoSuchEntity"
-            sleep(1)
-            @retry
-        end
+        @retry if e.code == "NoSuchEntity" end
     end
 end
 

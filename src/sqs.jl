@@ -27,7 +27,7 @@ sqs(aws; args...) = sqs(aws, StrDict(args))
 
 function sqs_get_queue(aws, name)
 
-    @safe try
+    @protected try
 
         r = sqs(aws, Action="GetQueueUrl", QueueName = name)
 
@@ -35,10 +35,10 @@ function sqs_get_queue(aws, name)
         return merge(aws, resource = URI(url).path)
 
     catch e
-        @trap e if e.code == "AWS.SimpleQueueService.NonExistentQueue"
-            return nothing
-        end
+        @ignore if e.code == "AWS.SimpleQueueService.NonExistentQueue" end
     end
+
+    return nothing
 end
 
 
@@ -68,18 +68,13 @@ function sqs_create_queue(aws, name; options...)
 
     catch e
 
-        if typeof(e) == AWSException
+        @retry if e.code == "QueueAlreadyExists"
+            sqs_delete_queue(aws, name)
+        end
 
-            if (e.code == "QueueAlreadyExists")
-                sqs_delete_queue(aws, name)
-                @retry
-            end
-
-            if (e.code == "AWS.SimpleQueueService.QueueDeletedRecently")
-                println("""Waiting 1 minute to re-create Queue "$name"...""")
-                sleep(60)
-                @retry
-            end
+        @retry if e.code == "AWS.SimpleQueueService.QueueDeletedRecently"
+            println("""Waiting 1 minute to re-create Queue "$name"...""")
+            sleep(60)
         end
     end
 
@@ -89,13 +84,13 @@ end
 
 function sqs_delete_queue(queue)
 
-    @safe try
+    @protected try
 
         println("Deleting SQS Queue $(aws["path"])")
         sqs(aws, Action="DeleteQueue")
 
     catch e
-        @trap e if e.code == "AWS.SimpleQueueService.NonExistentQueue" end
+        @ignore if e.code == "AWS.SimpleQueueService.NonExistentQueue" end
     end
 end
 
@@ -128,7 +123,7 @@ function sqs_receive_message(queue)
     handle = x[:ReceiptHandle]
     message = x[:Body]
 
-    if handle == ""
+    if handle == nothing
         return nothing
     end
 
@@ -154,7 +149,7 @@ end
 
 function sqs_get_queue_attributes(queue)
 
-    @safe try
+    @protected try
 
         r = sqs(queue, StrDict("Action" => "GetQueueAttributes",
                                "AttributeName.1" => "All"))
@@ -162,10 +157,10 @@ function sqs_get_queue_attributes(queue)
         return dict(XML(r), "GetQueueAttributesResult", "Attribute")
 
     catch e
-        @trap e if e.code == "AWS.SimpleQueueService.NonExistentQueue"
-            return nothing
-        end
+        @ignore if e.code == "AWS.SimpleQueueService.NonExistentQueue" end
     end
+
+    return nothing
 end
 
 

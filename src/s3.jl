@@ -50,16 +50,13 @@ end
 
 function s3_get(aws, bucket, path; version="")
 
-    @repeat 3 try
+    @repeat 4 try
 
         r = s3(aws, "GET", bucket; path = path, version = version)
         return r.data
 
     catch e
-        @trap e if e.code in ["NoSuchBucket", "NoSuchKey"]
-            sleep(1)
-            @retry
-        end
+        @delay_retry if e.code in ["NoSuchBucket", "NoSuchKey"] end
     end
 end
 
@@ -90,7 +87,7 @@ end
 
 function s3_exists(aws, bucket, path; version="")
 
-    @repeat 3 try
+    @repeat 4 try
 
         s3(aws, "GET", bucket; path = path,
                                headers = StrDict("Range" => "bytes=0-0"),
@@ -98,11 +95,8 @@ function s3_exists(aws, bucket, path; version="")
         return true
 
     catch e
-        @trap e if e.code in ["NoSuchBucket"]
-            sleep(1)
-            @retry
-        end
-        @trap e if e.code in ["NoSuchKey", "AccessDenied"]
+        @delay_retry if e.code in ["NoSuchBucket"] end
+        @ignore if e.code in ["NoSuchKey", "AccessDenied"]
             return false
         end
     end
@@ -133,7 +127,7 @@ function s3_create_bucket(aws, bucket)
 
     println("""Creating Bucket "$bucket"...""")
 
-    @safe try
+    @protected try
 
         if aws[:region] == "us-east-1"
 
@@ -151,7 +145,7 @@ function s3_create_bucket(aws, bucket)
         end
 
     catch e
-        @trap e if e.code == "BucketAlreadyOwnedByYou" end
+        @ignore if e.code == "BucketAlreadyOwnedByYou" end
     end
 end
 
@@ -202,7 +196,7 @@ function s3_list_objects(aws, bucket, path = "")
             q["key-marker"] = marker
         end
 
-        @repeat 3 try
+        @repeat 4 try
 
             r = s3(aws, "GET", bucket; query = q)
             r = XML(r)
@@ -219,10 +213,7 @@ function s3_list_objects(aws, bucket, path = "")
             end
 
         catch e
-            @trap e if e.code in ["NoSuchBucket"]
-                sleep(1)
-                @retry
-            end
+            @delay_retry if e.code in ["NoSuchBucket"] end
         end
     end
 

@@ -11,9 +11,10 @@
 module OCAWS
 
 
+using Retry
+
+
 include("ocdict.jl")
-include("retry.jl")
-include("trap.jl")
 include("http.jl")
 include("xml.jl")
 include("AWSException.jl")
@@ -140,22 +141,17 @@ function do_request(r::AWSRequest)
 
     catch e
 
-        if typeof(e) == HTTPException
+        # Handle HTTP Redirect...
+        @retry if http_status(e) in [301, 302, 307] && haskey(headers(e),
+                                                              "Location")
+            r[:url] = headers(e)["Location"]
+        end
 
-            # Try again on HTTP Redirect...
-            if (status(e) in [301, 302, 307]
-            &&  haskey(e.response.headers, "Location"))
-                r[:url] = e.response.headers["Location"]
-                @retry
-            end
+        e = AWSException(e)
 
-            e = AWSException(e)
-
-            # Try again on ExpiredToken error...
-            if e.code == "ExpiredToken"
-                delete(r[:creds], :access_key_id)
-                @retry
-            end
+        # Handle ExpiredToken...
+        @retry if e.code == "ExpiredToken"
+            delete(r[:creds], :access_key_id)
         end
     end
 

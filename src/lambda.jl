@@ -55,12 +55,12 @@ list_lambdas(aws) = [SymDict(f) for f in lambda(aws, "GET")["Functions"]]
 
 function lambda_configuration(aws, name)
 
-    @safe try
+    @protected try
 
         return lambda(aws, "GET", path="$name/configuration")
 
     catch e
-        @trap e if e.code == "404" end
+        @ignore if e.code == "404" end
     end
 
     return nothing
@@ -99,10 +99,10 @@ end
 
 function delete_lambda(aws, name)
 
-    @safe try
+    @protected try
         lambda(aws, "DELETE", path=name)
     catch e
-        @trap e if e.code == "404" end
+        @ignore if e.code == "404" end
     end
 end
 
@@ -124,7 +124,7 @@ end
 
 function invoke_lambda(aws, name, args)
 
-    @safe try
+    @protected try
 
         r = lambda(aws, "POST", path="$name/invocations", query=args)
 
@@ -135,7 +135,7 @@ function invoke_lambda(aws, name, args)
         return r
 
     catch e
-        @trap e if e.code == "429"
+        @ignore if e.code == "429"
             message = "HTTP 429 $(e.message)\nSee " *
                       "http://docs.aws.amazon.com/lambda/latest/dg/limits.html"
             throw(AWSLambdaException(string(name), message))
@@ -193,7 +193,7 @@ function update_lambda_zip(aws, key, files::Dict)
     catch e
 
         # Deploy update_zip lambda function if needed...
-        @trap e if e.code == "404"
+        @retry if e.code == "404"
 
             create_py_lambda(aws, lambda_name,
             """
@@ -390,6 +390,7 @@ macro lambda(aws::Symbol, f::Expr)
     f.args[2] = quote
         jl_data = serialize64($(Expr(:tuple, args...)))
         r = invoke_lambda($aws, $name, Dict(:jl_data => jl_data))
+        dump(r)
         try 
             return deserialize64(r[:jl_data])
         end
