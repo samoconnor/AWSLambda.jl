@@ -18,7 +18,7 @@ sqs_arn(q) = arn(q, "sqs", sqs_name(q))
 
 
 sqs(aws, query) = do_request(post_request(aws, "sqs", "2012-11-05", query))
-sqs(aws; args...) = sqs(aws, StrDict(args))
+sqs(aws; args...) = sqs(aws, StringDict(args))
 
 
 # SQS Queue Lookup.
@@ -31,7 +31,7 @@ function sqs_get_queue(aws, name)
 
         r = sqs(aws, Action="GetQueueUrl", QueueName = name)
 
-        url = XML(r)[:GetQueueUrlResult]
+        url = XML(r)["GetQueueUrlResult"]["QueueUrl"][1]
         return merge(aws, resource = URI(url).path)
 
     catch e
@@ -50,7 +50,7 @@ function sqs_create_queue(aws, name; options...)
 
     println("""Creating SQS Queue "$name"...""")
 
-    query = StrDict(
+    query = Dict(
         "Action" => "CreateQueue",
         "QueueName" => name
     )
@@ -63,7 +63,7 @@ function sqs_create_queue(aws, name; options...)
     @repeat 4 try
 
         r = sqs(aws, query)
-        url = XML(r)[:QueueUrl]
+        url = XML(r)["CreateQueueResult"]["QueueUrl"][1]
         return merge(aws, resource = URI(url).path)
 
     catch e
@@ -118,16 +118,16 @@ end
 function sqs_receive_message(queue)
 
     r = sqs(queue, Action="ReceiveMessage", MaxNumberOfMessages = "1")
-    x = XML(r)
-
-    handle = x[:ReceiptHandle]
-    message = x[:Body]
-
-    if handle == nothing
+    r = XML(r)["ReceiveMessageResult"]
+    if r == nothing
         return nothing
     end
 
-    @assert x["MD5OfBody"] == hexdigest("md5", message)
+    handle  = r["Message"]["ReceiptHandle"][1]
+    message = r["Message"]["Body"][1]
+    md5     = r["Message"]["MD5OfBody"][1]
+
+    @assert md5 == hexdigest("md5", message)
 
     @SymDict(message, handle)
 end
@@ -151,10 +151,10 @@ function sqs_get_queue_attributes(queue)
 
     @protected try
 
-        r = sqs(queue, StrDict("Action" => "GetQueueAttributes",
-                               "AttributeName.1" => "All"))
+        r = sqs(queue, Dict("Action" => "GetQueueAttributes",
+                            "AttributeName.1" => "All"))
 
-        return dict(XML(r), "GetQueueAttributesResult", "Attribute")
+        return XML(r)["GetQueueAttributesResult"]["Attribute"]["Name", "Value"]
 
     catch e
         @ignore if e.code == "AWS.SimpleQueueService.NonExistentQueue" end

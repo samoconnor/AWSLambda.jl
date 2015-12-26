@@ -20,9 +20,9 @@ s3_arn(bucket, path) = s3_arn("$bucket/$path")
 # S3 REST API request.
 
 function s3(aws, verb, bucket="";
-            headers=StrDict(),
+            headers=Dict(),
             path="",
-            query=StrDict(),
+            query=Dict(),
             version="",
             content="",
             return_stream=false)
@@ -33,6 +33,7 @@ function s3(aws, verb, bucket="";
     query = format_query_str(query)
 
     resource = "/$path$(query == "" ? "" : "?$query")"
+
     url = aws_endpoint("s3", aws[:region], bucket) * resource
 
     do_request(@SymDict(service = "s3",
@@ -79,7 +80,7 @@ function s3_get_meta(aws, bucket, path; version="")
 
     res = s3(aws, "GET", bucket;
              path = path,
-             headers = StrDict("Range" => "bytes=0-0"),
+             headers = Dict("Range" => "bytes=0-0"),
              version = version)
     return res.headers
 end
@@ -90,7 +91,7 @@ function s3_exists(aws, bucket, path; version="")
     @repeat 3 try
 
         s3(aws, "GET", bucket; path = path,
-                               headers = StrDict("Range" => "bytes=0-0"),
+                               headers = Dict("Range" => "bytes=0-0"),
                                version = version)
         return true
 
@@ -118,7 +119,7 @@ function s3_copy(aws, bucket, path; to_bucket=bucket, to_path="")
 
     s3(aws, "PUT", to_bucket;
                    path = to_path,
-                   headers = StrDict("x-amz-copy-source" => "/$bucket/$path"))
+                   headers = Dict("x-amz-copy-source" => "/$bucket/$path"))
 end
 
  
@@ -137,7 +138,7 @@ function s3_create_bucket(aws, bucket)
         else
 
             s3(aws, "PUT", bucket;
-                headers = StrDict("Content-Type" => "text/plain"),
+                headers = Dict("Content-Type" => "text/plain"),
                 content = """
                 <CreateBucketConfiguration
                              xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
@@ -174,7 +175,7 @@ s3_delete_bucket(aws, bucket) = s3(aws, "DELETE", bucket)
 function s3_list_buckets(aws)
 
     r = s3(aws,"GET")
-    list(XML(r), "Buckets", "Bucket", "Name")
+    XML(r)["Buckets"]["Bucket"]["Name"]
 end
 
 
@@ -202,7 +203,7 @@ function s3_list_objects(aws, bucket, path = "")
             r = s3(aws, "GET", bucket; query = q)
             r = XML(r)
 
-            more = r[:IsTruncated] == "true"
+            more = r["IsTruncated"] == "true"
             for e in get_elements_by_tagname(root(r), "Contents")
 
                 o = Dict()
@@ -239,7 +240,7 @@ function s3_list_versions(aws, bucket, path="")
 
         r = s3(aws, "GET", bucket; query = query)
         r = XML(r)
-        more = r[:IsTruncated] == "true"
+        more = r["IsTruncated"][1] == "true"
 
         for e in child_elements(root(r))
 
@@ -298,7 +299,7 @@ function s3_put(aws, bucket, path, data, data_type="")
 
     s3(aws, "PUT", bucket;
        path=path,
-       headers=StrDict("Content-Type" => data_type),
+       headers=Dict("Content-Type" => data_type),
        content=data)
 end
 

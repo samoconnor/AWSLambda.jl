@@ -50,11 +50,38 @@ function AWSException(e::HTTPException)
     if (content_type(e) in ["", "application/xml", "text/xml"]
     &&  length(http_message(e)) > 0)
         xml = XML(http_message(e))
-        code = get(xml, "Code", code)
-        message = get(xml, "Message", message)
+        code = find_tag(xml, "Code", code)
+        message = find_tag(xml, "Message", message)
     end
 
     AWSException(code, message, e)
+end
+
+
+AWSException(e) = e
+
+
+import LightXML: LightXML, XMLDocument, XMLElement, root,
+                 find_element, child_elements, content
+
+function find_tag(xml, tag::AbstractString, default=nothing)
+
+    if typeof(xml) == XMLDocument
+        xml = root(xml)
+    end
+    i = find_element(xml, tag)
+    if i != nothing
+        return content(i)
+    end
+
+    for e in child_elements(xml)
+        e = get(e, tag)
+        if e != nothing
+            return e
+        end
+    end
+
+    return default
 end
 
 

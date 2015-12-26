@@ -32,7 +32,7 @@ content_type(e::HTTPException) = get(e.response.headers, "Content-Type", "")
 
 function show(io::IO,e::HTTPException)
 
-    println(io, string("HTTP ", status(e), " -- ",
+    println(io, string("HTTP ", http_status(e), " -- ",
                        e.request.method, " ", e.request.uri, " -- ",
                         http_message(e)))
 end

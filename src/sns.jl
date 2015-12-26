@@ -19,7 +19,7 @@ sns(aws, query) = do_request(post_request(aws, "sns", "2010-03-31", query))
 
 function sns(aws, action, topic; args...)
 
-    sns(aws, merge(StrDict(args),
+    sns(aws, merge(StringDict(args),
                    "Action" => action,
                    "Name" => topic,
                    "TopicArn" => sns_arn(aws, topic)))
@@ -49,20 +49,21 @@ end
 
 function sns_subscribe_sqs(aws, topic_name, queue; raw=flase)
 
-    r = sns(aws, StrDict("Action" => "Subscribe",
-                         "Name" => topic_name,
-                         "TopicArn" => sns_arn(aws, topic_name),
-                         "Endpoint" => sqs_arn(queue),
-                         "Protocol" => "sqs"))
+    r = sns(aws, Dict("Action" => "Subscribe",
+                      "Name" => topic_name,
+                      "TopicArn" => sns_arn(aws, topic_name),
+                      "Endpoint" => sqs_arn(queue),
+                      "Protocol" => "sqs"))
 
     if raw
+        arn = XML(r)["SubscribeResult"]["SubscriptionArn"][1]
         sns(aws, "SetSubscriptionAttributes", topic_name,
-                  SubscriptionArn = XML(r)[:SubscriptionArn],
+                  SubscriptionArn = arn,
                   AttributeName = "RawMessageDelivery",
                   AttributeValue = "true")
     end
 
-    sqs(queue, StrDict(
+    sqs(queue, Dict(
         "Action" => "SetQueueAttributes",
         "Attribute.Name" => "Policy",
         "Attribute.Value" => """{

@@ -8,7 +8,7 @@
 
 
 export iam_whoami,
-       iam_get_user, iam_get_role, iam_create_user, iam_create_access_key,
+       iam_create_user, iam_create_access_key,
        iam_delete_access_key, iam_delete_user, iam_put_user_policy,
        iam_format_policy
 
@@ -16,13 +16,14 @@ export iam_whoami,
 role_arn(aws, role_name) = arn(aws, "iam", "role/$role_name")
 user_arn(aws, user_name) = arn(aws, "iam", "user/$user_name")
 
-
 function iam(aws; args...)
+
+    aws = merge(aws, region = "us-east-1")
 
     @repeat 4 try
 
-        return do_request(post_request(merge(aws, region = "us-east-1"),
-                                       "iam", "2010-05-08", StrDict(args)))
+        return do_request(post_request(aws, "iam", "2010-05-08",
+                                       StringDict(args)))
 
     catch e
         @retry if e.code == "NoSuchEntity" end
@@ -33,28 +34,14 @@ end
 function sts(aws; args...)
 
     do_request(post_request(merge(aws, region = "us-east-1"),
-                            "iam", "2011-06-15", StrDict(args)))
-end
-
-
-function iam_get_user(aws, user_name)
-
-    r = iam(aws, Action = "GetUser", UserName = user_name)
-    XML(r)[:User]
+                            "iam", "2011-06-15", StringDict(args)))
 end
 
 
 function iam_whoami(aws)
 
     r = iam(aws, Action = "GetUser")
-    XML(r)[:Arn]
-end
-
-
-function iam_get_role(aws, role_name)
-
-    r = iam(aws, "GetRole", Dict("RoleName" => role_name))
-    XML(r)[:Role]
+    XML(r)["GetUserResult"]["User"]["Arn"][1]
 end
 
 
@@ -78,10 +65,8 @@ end
 function iam_create_access_key(aws, user_name)
 
     r = iam(aws, "CreateAccessKey", Dict("UserName" => user_name))
-    r = XML(r)
-    merge(aws, Dict("access_key_id" => r[:AccessKeyId],
-                    "secret_key" => r[:SecretAccessKey],
-                    "user_arn" => user_arn(aws, user_name)))
+    r = XML(r)["CreateAccessKeyResult"]["AccessKey"]
+    AWSCredentials(r[:AccessKeyId], r[:SecretAccessKey])
 end
 
 

@@ -19,15 +19,15 @@ sdb(aws, query) = do_request(post_request(aws, "sdb", "2009-04-15", query))
 
 function sdb_list_domains(aws)
 
-    r = sdb(aws, StrDict("Action" => "ListDomains"))
-    return list(XML(r), "ListDomainsResult", "DomainName")
+    r = sdb(aws, Dict("Action" => "ListDomains"))
+    return XML(r)["ListDomainsResult"]["DomainName"]
 end
 
 
-function sdb(aws, action, domain, query::StrDict = StrDict())
+function sdb(aws, action, domain, query::Dict = StringDict())
 
-    sdb(aws, merge(query, StrDict("Action" => action,
-                                  "DomainName" => domain)))
+    sdb(aws, merge(query, Dict("Action" => action,
+                               "DomainName" => domain)))
 end
 
 
@@ -35,9 +35,9 @@ sdb_create_domain(aws, domain) = sdb(aws, "CreateDomain", domain)
 sdb_delete_domain(aws, domain) = sdb(aws, "DeleteDomain", domain)
 
 
-function sdb(aws, action, domain, item, query::StrDict = StrDict())
+function sdb(aws, action, domain, item, query::Dict = Dict())
 
-    sdb(aws, action, domain, merge(query, StrDict("ItemName" => item)))
+    sdb(aws, action, domain, merge(query, Dict("ItemName" => item)))
 end
 
 
@@ -46,7 +46,7 @@ sdb_delete_item(aws, domain, item) = sdb(aws, "DeleteAttributes", domain, item)
 
 function sdb_put(aws, domain, item, attributes; replace = false)
 
-    request = StrDict()
+    request = Dict(AbstractString, Any)
     i = 1
     for (n, v) in attributes
 
@@ -62,7 +62,7 @@ end
 
 function sdb_get(aws, domain, item, attribute = "")
 
-    request = StrDict()
+    request = Dict(AbstractString, Any)
 
     if attribute != ""
         request["AttributeName"] = attribute
@@ -70,7 +70,7 @@ function sdb_get(aws, domain, item, attribute = "")
 
     r = sdb(aws, "GetAttributes", domain, item, request)
 
-    r = dict(XML(r), "GetAttributesResult", "Attribute")
+    r = XML(r)["GetAttributesResult"]["Attribute"]["Name", "Value"]
 
     if attribute != ""
         return r[attribtue]

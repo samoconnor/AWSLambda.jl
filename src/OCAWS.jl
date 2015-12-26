@@ -12,9 +12,10 @@ module OCAWS
 
 
 using Retry
+using SymDict
 
 
-include("ocdict.jl")
+#include("ocdict.jl")
 include("http.jl")
 include("xml.jl")
 include("AWSException.jl")
@@ -32,10 +33,10 @@ function aws_config(;creds=AWSCredentials(), region="us-east-1", args...)
 end
 
 
-function arn(aws::SymDict, service,
-                           resource,
-                           region=get(aws, :region, ""),
-                           account=aws_account_number(aws[:creds]))
+function arn(aws::SymbolDict, service,
+                              resource,
+                              region=get(aws, :region, ""),
+                              account=aws_account_number(aws[:creds]))
 
     arn(service, resource, region, account)
 end
@@ -46,7 +47,7 @@ end
 #------------------------------------------------------------------------------#
 
 
-typealias AWSRequest SymDict
+typealias AWSRequest SymbolDict
 
 
 # Construct a HTTP POST request dictionary for "servce" and "query"...
@@ -67,10 +68,10 @@ typealias AWSRequest SymDict
 #     :service  => "sdb"
 # )
 
-function post_request(aws::SymDict,
+function post_request(aws::AWSRequest,
                       service::ASCIIString,
                       version::ASCIIString,
-                      query::StrDict)
+                      query::Dict)
 
     resource = get(aws, :resource, "/")
     url = aws_endpoint(service, aws[:region]) * resource
@@ -123,7 +124,7 @@ function do_request(r::AWSRequest)
 
         # Configure default headers...
         if !haskey(r, :headers)
-            r[:headers] = StrDict()
+            r[:headers] = Dict()
         end
         r[:headers]["User-Agent"] = "JuliaAWS.jl/0.0.0"
         r[:headers]["Host"]       = URI(r[:url]).host

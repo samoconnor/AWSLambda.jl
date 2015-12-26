@@ -42,7 +42,7 @@ function lambda(aws, verb; path="", query="")
     if length(r.data) > 0
         r = JSON.parse(bytestring(r.data))
         if isa(r, Dict)
-            r = SymDict(r)
+            r = SymbolDict(r)
         end
     end
 
@@ -50,7 +50,7 @@ function lambda(aws, verb; path="", query="")
 end
 
 
-list_lambdas(aws) = [SymDict(f) for f in lambda(aws, "GET")["Functions"]]
+list_lambdas(aws) = [SymbolDict(f) for f in lambda(aws, "GET")["Functions"]]
 
 
 function lambda_configuration(aws, name)
@@ -146,7 +146,7 @@ function invoke_lambda(aws, name, args)
 end
 
 
-invoke_lambda(aws, name; args...) = invoke_lambda(aws, name, SymDict(args))
+invoke_lambda(aws, name; args...) = invoke_lambda(aws, name, SymbolDict(args))
 
 
 

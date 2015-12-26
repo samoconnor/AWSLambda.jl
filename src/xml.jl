@@ -7,73 +7,40 @@
 #==============================================================================#
 
 
-import LightXML: LightXML, XMLDocument, XMLElement, root, find_element, content,
-                 get_elements_by_tagname, child_elements, name
+import LightXML: LightXML, XMLDocument, XMLElement, root, name,
+                 child_elements, get_elements_by_tagname, content
 
-XML(s) = LightXML.parse_string(s)
-XML(r::Response) = XML(r.data)
+XML(s::AbstractString) = LightXML.parse_string(s)
 XML(s::Array{UInt8,1}) = XML(bytestring(s))
+XML(r::Response) = XML(r.data)
 
+has_child_elements(e::XMLElement) = length(collect(child_elements(e))) > 0
 
-import Base: get
+function Base.getindex(e::XMLElement, tag::AbstractString)
 
-import Base.getindex
-
-function get(e::XMLElement, name, default=nothing)
-
-    i = find_element(e, name)
-    if i != nothing
-        return content(i)
+    l = get_elements_by_tagname(e, tag)
+    if l == nothing || has_child_elements(l[1])
+        return l
+    else
+        l = [strip(content(i)) for i in l]
+        return all(i -> i == "", l) ? nothing : l
     end
-    
-    for e in child_elements(e)
-        e = get(e, name)
-        if e != nothing
-            return e
-        end
-    end
-
-    return default
 end
 
 
-get(d::XMLDocument, name, default=nothing) = get(root(d), name, default)
+function Base.getindex(a::Array{XMLElement,1}, tag::AbstractString)
 
-getindex(e::XMLElement, name) = get(e, string(name))
-getindex(d::XMLDocument, name) = get(d, string(name))
-
-
-function list(xdoc::XMLDocument, list_tag, item_tag, subitem_tag="")
-
-    result = AbstractString[]
-
-    l = find_element(root(xdoc), list_tag)
-    for e in get_elements_by_tagname(l, item_tag)
-
-        if subitem_tag != ""
-            e = find_element(e, subitem_tag)
-        end
-        push!(result, content(e))
-    end
-
-    return result
+    vcat([e[tag] for e in a]...)
 end
 
 
-function dict(xdoc::XMLDocument, list_tag, item_tag,
-              name_tag = "Name", value_tag = "Value")
+Base.getindex(d::XMLDocument, tag::AbstractString) = LightXML.root(d)[tag]
 
-    result = Dict()
 
-    l = find_element(root(xdoc), list_tag)
-    for e in get_elements_by_tagname(l, item_tag)
+function Base.getindex(a::Array{XMLElement,1},
+                       n::AbstractString, v::AbstractString)
 
-        n = content(find_element(e, name_tag))
-        v = content(find_element(e, value_tag))
-        result[n] = v
-    end
-
-    return result
+    [e[n][1] => e[v][1] for e in a]
 end
 
 

@@ -29,7 +29,7 @@ function ec2_id(aws, name)
                           "Filter.2.Name"    = "value",
                           "Filter.2.Value.1" = name))
 
-    XML(r)[:resourceId]
+    XML(r)["tagSet"]["item"]["resourceId"][1]
 end
 
 
@@ -127,10 +127,10 @@ function create_ec2(aws, name; ImageId="ami-1ecae776",
         @delay_retry if e.code == "InvalidParameterValue" end
     end
 
-    r = XML(r)
+    r = XML(r)["RunInstancesResponse"]["instancesSet"]["item"]
 
     ec2(aws, StrDict("Action"       => "CreateTags",
-                     "ResourceId.1" => r[:instanceId],
+                     "ResourceId.1" => r["instanceId"][1],
                      "Tag.1.Key"    => "Name",
                      "Tag.1.Value"  => name))
 

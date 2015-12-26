@@ -84,7 +84,7 @@ function sign_aws4!(r::AWSRequest, t)
 
     # HTTP headers...
     delete!(r[:headers], "Authorization")
-    merge!(r[:headers], StrDict(
+    merge!(r[:headers], Dict(
         "x-amz-content-sha256" => content_hash,
         "x-amz-date"           => datetime,
         "Content-MD5"          => base64encode(digest("md5", r[:content]))

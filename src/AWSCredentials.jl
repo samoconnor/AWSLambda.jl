@@ -93,10 +93,10 @@ function aws_user_arn(c::AWSCredentials)
     if c.user_arn != ""
         c.user_arn
     else
-        aws = SymDict(:creds => c, :region => "us-east-1")
+        aws = Dict(:creds => c, :region => "us-east-1")
         r = do_request(post_request(aws, "iam", "2010-05-08",
                                     Dict("Action" => "GetUser")))
-        XML(r.data)[:Arn]
+        XML(r)["GetUserResult"]["User"]["Arn"][1]
     end
 end
 
