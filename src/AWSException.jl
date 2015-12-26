@@ -18,7 +18,7 @@ type AWSException <: Exception
 end
 
 
-function show(io::IO,e::AWSException)
+function Base.show(io::IO,e::AWSException)
     println(io, string(e.code,
                        e.message == "" ? "" : (" -- " * e.message), "\n",
                        e.http))

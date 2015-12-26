@@ -129,7 +129,7 @@ function sqs_receive_message(queue)
 
     @assert x["MD5OfBody"] == hexdigest("md5", message)
 
-    @symdict(message, handle)
+    @SymDict(message, handle)
 end
     
 

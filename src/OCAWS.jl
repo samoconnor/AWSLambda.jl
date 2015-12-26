@@ -18,28 +18,27 @@ include("ocdict.jl")
 include("http.jl")
 include("xml.jl")
 include("AWSException.jl")
+include("aws_names.jl")
+include("AWSCredentials.jl")
 
 
 export sqs, sns, ec2, iam, sdb, s3,
        AWSConfig, aws_config, AWSRequest
 
-typealias AWSConfig SymDict
 
-function aws_config(;access_key_id=nothing,
-                     secret_key=nothing,
-                     region="us-east-1",
-                     args...)
+function aws_config(;creds=AWSCredentials(), region="us-east-1", args...)
 
-    config = SymDict(args)
-    config[:region] = region
-    if access_key_id != nothing
-        config[:creds] = @symdict(access_key_id, secret_key)
-    else
-        config[:creds] = SymDict()
-    end
-    return config
+    @SymDict(creds, region, args...)
 end
 
+
+function arn(aws::SymDict, service,
+                           resource,
+                           region=get(aws, :region, ""),
+                           account=aws_account_number(aws[:creds]))
+
+    arn(service, resource, region, account)
+end
 
 
 #------------------------------------------------------------------------------#
@@ -53,13 +52,13 @@ typealias AWSRequest SymDict
 # Construct a HTTP POST request dictionary for "servce" and "query"...
 #
 # e.g.
-# aws = SymDict{:creds => SymDict{:access_key_id => "xx", secret_key => "xx"},
-#               :region => "ap-southeast-2"}
+# aws = Dict(:creds  => AWSCredentials(),
+#            :region => "ap-southeast-2")
 #
 # post_request(aws, "sdb", "2009-04-15", StrDict("Action" => "ListDomains"))
 #
 # Dict{Symbol, Any}(
-#     :creds    => Dict{Symbol,Any}(:access_key_id=>"xx",:secret_key=>"xx")
+#     :creds    => creds::AWSCredentials
 #     :verb     => "POST"
 #     :url      => "http://sdb.ap-southeast-2.amazonaws.com/"
 #     :content  => "Version=2009-04-15&Action=ListDomains"
@@ -68,7 +67,7 @@ typealias AWSRequest SymDict
 #     :service  => "sdb"
 # )
 
-function post_request(aws::AWSConfig,
+function post_request(aws::SymDict,
                       service::ASCIIString,
                       version::ASCIIString,
                       query::StrDict)
@@ -77,21 +76,26 @@ function post_request(aws::AWSConfig,
     url = aws_endpoint(service, aws[:region]) * resource
     content = format_query_str(merge(query, "Version" => version))
 
-    @symdict(verb = "POST", service, resource, url, query, content, aws...)
+    @SymDict(verb = "POST", service, resource, url, query, content, aws...)
 end
 
 
-# Convert AWSRequet dictionary into Request (Requests.jl)
+# Convert AWSRequest dictionary into Request (Requests.jl)
 
 function Request(r::AWSRequest)
     Request(r[:verb], r[:resource], r[:headers], r[:content], URI(r[:url]))
 end
+
+
+# Call http_request for AWSRequest.
 
 function http_request(r::AWSRequest, args...)
 
     http_request(Request(r), get(r, :return_stream, false))
 end
 
+
+# Pretty-print AWSRequest dictionary.
 
 function dump_aws_request(r::AWSRequest)
 
@@ -101,6 +105,7 @@ function dump_aws_request(r::AWSRequest)
     end
     println("$(r[:service]).$action $(r[:resource])")
 end
+
 
 
 #------------------------------------------------------------------------------#
@@ -128,8 +133,8 @@ function do_request(r::AWSRequest)
         end
 
         # Load local system credentials if needed...
-        if !haskey(r, :creds) || !haskey(r[:creds], :access_key_id)
-            update_instance_credentials!(r[:creds])
+        if !haskey(r, :creds) || r[:creds].token == "ExpiredToken"
+            r[:creds] = AWSCredentials()
         end
 
         # Use credentials to sign request...
@@ -151,181 +156,11 @@ function do_request(r::AWSRequest)
 
         # Handle ExpiredToken...
         @retry if e.code == "ExpiredToken"
-            delete(r[:creds], :access_key_id)
+            r[:creds].token = "ExpiredToken"
         end
     end
 
     assert(false) # Unreachable.
-end
-
-
-
-#------------------------------------------------------------------------------#
-# AWS Endpoints
-#------------------------------------------------------------------------------#
-
-
-# e.g.
-#
-#   aws_endpoint("sqs", "eu-west-1")
-#   "http://sqs.eu-west-1.amazonaws.com"
-
-function aws_endpoint(service, region="", prefix="")
-
-    protocol = "http"
-
-    # HTTPS where required...
-    if service in ["iam", "sts", "lambda"]
-        protocol = "https"
-    end
-
-    # Identity and Access Management API has no region suffix...
-    if service in ["iam", "sts"]
-        region = ""
-    end
-
-    # No region sufix for s3 or sdb in default region...
-    if region == "us-east-1" && service in ["s3", "sdb"]
-        region = ""
-    end
-
-    # Append region...
-    if region != ""
-        if service == "s3"
-            service = "$service-$region"
-        else
-            service = "$service.$region"
-        end
-    end
-
-    # Optional bucket prefix...
-    if prefix != ""
-        service = "$prefix.$service"
-    end
-
-    "$protocol://$service.amazonaws.com"
-end
-
-
-
-#------------------------------------------------------------------------------#
-# Amazon Resource Names
-#------------------------------------------------------------------------------#
-
-
-export aws_account_number, arn
-
-
-function aws_account_number(aws)
-
-    if !haskey(aws[:creds], :user_arn)
-        aws[:creds][:user_arn] = iam_whoami(aws)
-    end
-    split(aws[:creds][:user_arn], ":")[5]
-end
-
-
-function arn(aws, service, resource, region=get(aws, :region, ""),
-                                     account=aws_account_number(aws))
-
-    if service == "s3"
-        region = ""
-        account = ""
-    elseif service == "iam"
-        region = ""
-    end
-
-    "arn:aws:$service:$region:$account:$resource"
-end
-
-
-
-#------------------------------------------------------------------------------#
-# EC2 Metadata
-#------------------------------------------------------------------------------#
-
-
-import JSON: JSON, json
-
-export localhost_is_ec2, ec2_metadata, ec2_get_instance_credentials
-
-
-ec2(aws; args...) = do_request(post(aws, "ec2", "2014-02-01", StrDict(args)))
-
-
-function localhost_is_ec2()
-
-    if localhost_is_lambda()
-        return false
-    end
-
-    host = readall(`hostname -f`)
-    return ismatch(r"compute.internal$", host) ||
-           ismatch(r"ec2.internal$", host)
-end
-
-
-# Lookup EC2 meta-data "key".
-# Must be called from an EC2 instance.
-# http://docs.aws.amazon.com/AWSEC2/latest/UserGuide/AESDG-chapter-instancedata.html
-
-function ec2_metadata(key)
-
-    @assert localhost_is_ec2()
-
-    r = http_request("169.254.169.254", "latest/meta-data/$key").data
-    return r.data
-end
-
-
-function update_ec2_instance_credentials!(creds)
-
-    @assert localhost_is_ec2()
-
-    info  = ec2_metadata("iam/info")
-    info  = JSON.parse(info)
-
-    name  = ec2_metadata("iam/security-credentials/")
-    new_creds = ec2_metadata("iam/security-credentials/$name")
-    new_creds = JSON.parse(new_creds)
-
-    creds[:access_key_id] = new_creds["AccessKeyId"]
-    creds[:secret_key]    = new_creds["SecretAccessKey"]
-    creds[:token]         = new_creds["Token"]
-    creds[:user_arn]      = info["InstanceProfileArn"]
-end
-
-
-
-#------------------------------------------------------------------------------#
-# Lambda Metadata
-#------------------------------------------------------------------------------#
-
-using IniFile
-
-localhost_is_lambda() = haskey(ENV, "LAMBDA_TASK_ROOT")
-
-
-function update_instance_credentials!(creds)
-
-    if localhost_is_ec2()
-
-        update_ec2_instance_credentials!(aws)
-
-    elseif haskey(ENV, "AWS_ACCESS_KEY_ID")
-
-        creds[:access_key_id] = ENV["AWS_ACCESS_KEY_ID"]
-        creds[:secret_key]    = ENV["AWS_SECRET_ACCESS_KEY"]
-        creds[:token]         = ENV["AWS_SESSION_TOKEN"]
-
-    elseif isfile("$(ENV["HOME"])/.aws/credentials")
-
-        ini = read(Inifile(), "$(ENV["HOME"])/.aws/credentials")
-
-        creds[:access_key_id] = get(ini, "default", "aws_access_key_id")
-        creds[:secret_key]    = get(ini, "default", "aws_secret_access_key")
-        delete!(creds, :token)
-    end
 end
 
 

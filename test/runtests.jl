@@ -20,9 +20,9 @@ import OCAWS: @repeat, @protected, symdict, StrDict
 function aws4_request_headers_test()
 
     r = symdict(
-        creds         = symdict(
-                        access_key_id = "AKIDEXAMPLE",
-                        secret_key = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+        creds         = AWSCredentials(
+                            "AKIDEXAMPLE",
+                            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
                         ),
         region        = "us-east-1",
         verb          = "POST",
@@ -30,9 +30,9 @@ function aws4_request_headers_test()
         url           = "http://iam.amazonaws.com/",
         content       = "Action=ListUsers&Version=2010-05-08",
         headers       = StrDict(
-                        "Content-Type" =>
-                        "application/x-www-form-urlencoded; charset=utf-8",
-                        "Host" => "iam.amazonaws.com"
+                            "Content-Type" =>
+                            "application/x-www-form-urlencoded; charset=utf-8",
+                            "Host" => "iam.amazonaws.com"
                         )
     )
 
@@ -80,6 +80,7 @@ println(iam_whoami(aws))
 # Arn tests
 #-------------------------------------------------------------------------------
 
+println(arn(aws,"s3","foo/bar"))
 
 @test arn(aws,"s3","foo/bar") == "arn:aws:s3:::foo/bar"
 @test arn(aws,"s3","foo/bar") == s3_arn("foo","bar")

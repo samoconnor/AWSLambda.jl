@@ -35,7 +35,7 @@ function s3(aws, verb, bucket="";
     resource = "/$path$(query == "" ? "" : "?$query")"
     url = aws_endpoint("s3", aws[:region], bucket) * resource
 
-    do_request(@symdict(service = "s3",
+    do_request(@SymDict(service = "s3",
                         verb,
                         url,
                         resource,
@@ -87,7 +87,7 @@ end
 
 function s3_exists(aws, bucket, path; version="")
 
-    @repeat 4 try
+    @repeat 3 try
 
         s3(aws, "GET", bucket; path = path,
                                headers = StrDict("Range" => "bytes=0-0"),
@@ -95,7 +95,8 @@ function s3_exists(aws, bucket, path; version="")
         return true
 
     catch e
-        @delay_retry if e.code in ["NoSuchBucket"] end
+        @delay_retry if e.code in ["NoSuchBucket", "NoSuchKey", "AccessDenied"]
+        end
         @ignore if e.code in ["NoSuchKey", "AccessDenied"]
             return false
         end
@@ -307,7 +308,7 @@ import Nettle: digest
 
 function s3_sign_url(aws, bucket, path, seconds = 3600)
 
-    query = Dict("AWSAccessKeyId" =>  aws[:creds][:access_key_id],
+    query = Dict("AWSAccessKeyId" =>  aws[:creds].access_key_id,
                  "x-amz-security-token" => get(aws, "token", ""),
                  "Expires" => string(round(Int, Dates.datetime2unix(now(Dates.UTC)) + seconds)),
                  "response-content-disposition" => "attachment")
@@ -316,7 +317,7 @@ function s3_sign_url(aws, bucket, path, seconds = 3600)
               "x-amz-security-token:$(query["x-amz-security-token"])\n" *
               "/$bucket/$path?response-content-disposition=attachment"
 
-    key = aws[:creds][:secret_key]
+    key = aws[:creds].secret_key
     query["Signature"] = digest("sha1", key, to_sign) |> base64encode |> strip
 
     endpoint=aws_endpoint("s3", aws[:region], bucket)

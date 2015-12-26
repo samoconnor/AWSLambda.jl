@@ -36,20 +36,20 @@ function sign_aws2!(r::AWSRequest, t)
     r[:headers]["Content-Type"] = 
         "application/x-www-form-urlencoded; charset=utf-8"
 
-    query["AWSAccessKeyId"] = r[:creds][:access_key_id]
+    query["AWSAccessKeyId"] = r[:creds].access_key_id
     query["Expires"] = Dates.format(t + Dates.Second(120),
                                     "yyyy-mm-ddTHH:MM:SSZ")
     query["SignatureVersion"] = "2"
     query["SignatureMethod"] = "HmacSHA256"
-    if haskey(r[:creds], :token)
-        query["SecurityToken"] = r[:creds][:token]
+    if r[:creds].token != ""
+        query["SecurityToken"] = r[:creds].token
     end
 
     query = [(k, query[k]) for k in sort(collect(keys(query)))]
 
     to_sign = "POST\n$(uri.host)\n$(uri.path)\n$(format_query_str(query))"
     
-    secret = r[:creds][:secret_key]
+    secret = r[:creds].secret_key
     push!(query, ("Signature", digest("sha256", secret, to_sign)
                                |> base64encode |> strip))
 
@@ -71,7 +71,7 @@ function sign_aws4!(r::AWSRequest, t)
     scope = [date, r[:region], r[:service], "aws4_request"]
 
     # Signing key generated from today's scope string...
-    signing_key = string("AWS4", r[:creds][:secret_key])
+    signing_key = string("AWS4", r[:creds].secret_key)
     for element in scope
         signing_key = digest("sha256", signing_key, element)
     end
@@ -89,8 +89,8 @@ function sign_aws4!(r::AWSRequest, t)
         "x-amz-date"           => datetime,
         "Content-MD5"          => base64encode(digest("md5", r[:content]))
     ))
-    if haskey(r[:creds], :token)
-        r[:headers]["x-amz-security-token"] = r[:creds][:token]
+    if r[:creds].token != ""
+        r[:headers]["x-amz-security-token"] = r[:creds].token
     end
 
     # Sort and lowercase() Headers to produce canonical form...
@@ -118,7 +118,7 @@ function sign_aws4!(r::AWSRequest, t)
     # Append Authorization header...
     r[:headers]["Authorization"] = string(
         "AWS4-HMAC-SHA256 ",
-        "Credential=$(r[:creds][:access_key_id])/$scope, ",
+        "Credential=$(r[:creds].access_key_id)/$scope, ",
         "SignedHeaders=$signed_headers, ",
         "Signature=$signature"
     )

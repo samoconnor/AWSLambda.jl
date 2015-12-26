@@ -28,7 +28,7 @@ function lambda(aws, verb; path="", query="")
 
     resource = "/2015-03-31/functions/$path"
 
-    r = @symdict(
+    r = @SymDict(
         service  = "lambda",
         url      = aws_endpoint("lambda", aws[:region]) * resource,
         content  = query == "" ? "" : json(query),
@@ -78,8 +78,8 @@ function create_lambda(aws, name, S3Key;
                        Timeout=30,
                        args...)
 
-   query = @symdict(FunctionName = name,
-                    Code = @symdict(S3Key, S3Bucket),
+   query = @SymDict(FunctionName = name,
+                    Code = @SymDict(S3Key, S3Bucket),
                     Handler,
                     Role,
                     Runtime,
@@ -93,7 +93,7 @@ end
 function update_lambda(aws, name, S3Bucket, S3Key)
 
     lambda(aws, "PUT", path="$name/code",
-                       query=@symdict(S3Key, S3Bucket))
+                       query=@SymDict(S3Key, S3Bucket))
 end
 
 
@@ -188,7 +188,7 @@ function update_lambda_zip(aws, key, files::Dict)
 
         # Call lambda function to update ZIP stored in S3...
         bucket = aws[:lambda_bucket]
-        invoke_lambda(aws, lambda_name, @symdict(bucket, key, files))
+        invoke_lambda(aws, lambda_name, @SymDict(bucket, key, files))
 
     catch e
 

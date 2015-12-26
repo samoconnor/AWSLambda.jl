@@ -45,17 +45,17 @@ symdict(;args...) = SymDict(args)
 #
 #   a = 1
 #   b = 2
-#   @symdict(a,b,c=3,d=4)
+#   @SymDict(a,b,c=3,d=4)
 #   Dict(:a=>1,:b=>2,:c=>4,:d=>4)
 #
 #   function f(a; args...)
 #       b = 2
-#       @symdict(a, b, c=3, d=0, args...)
+#       @SymDict(a, b, c=3, d=0, args...)
 #   end
 #   f(1, d=4)
 #   Dict(:a=>1,:b=>2,:c=>4,:d=>4)
 
-macro symdict(args...)
+macro SymDict(args...)
 
     @assert !isa(args[1], Expr) || args[1].head != :tuple
 

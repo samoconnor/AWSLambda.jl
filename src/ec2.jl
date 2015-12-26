@@ -12,6 +12,9 @@ export ec2
 include("mime.jl")
 
 
+ec2(aws; args...) = ec2(aws, StrDict(args))
+
+
 function ec2(aws, query)
 
     do_request(post_request(aws, "ec2", "2014-02-01", StrDict(query)))
@@ -20,7 +23,7 @@ end
 
 function ec2_id(aws, name)
 
-    r = ec2(aws, @symdict(Action             = "DescribeTags",
+    r = ec2(aws, @SymDict(Action             = "DescribeTags",
                           "Filter.1.Name"    = "key",
                           "Filter.1.Value.1" = "Name",
                           "Filter.2.Name"    = "value",
@@ -43,15 +46,15 @@ function create_ec2(aws, name; ImageId="ami-1ecae776",
     old_id = ec2_id(aws, name)
     if old_id != nothing
 
-        ec2(aws, @symdict(Action = "DeleteTags", 
+        ec2(aws, @SymDict(Action = "DeleteTags", 
                           "ResourceId.1" = old_id,
                           "Tag.1.Key" = "Name"))
 
-        ec2(aws, @symdict(Action = "TerminateInstances", 
+        ec2(aws, @SymDict(Action = "TerminateInstances", 
                           "InstanceId.1" = old_id))
     end
 
-    request = @symdict(Action="RunInstances",
+    request = @SymDict(Action="RunInstances",
                        ImageId,
                        UserData,
                        MinCount="1",
