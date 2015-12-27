@@ -7,8 +7,9 @@
 
 using OCAWS
 using Base.Test
+using LightXML
 
-import OCAWS: @repeat, @protected, @SymDict, XML
+import OCAWS: @repeat, @protected, @SymDict
 
 
 

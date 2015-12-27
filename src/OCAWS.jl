@@ -5,19 +5,15 @@
 #==============================================================================#
 
 
-#FIXME depends on URIParser.jl commit 2bc38088257df968e2b7a4e2e14cc8440bf341e1
-
-
 module OCAWS
 
 
 using Retry
 using SymDict
+using LightXML
 
 
-#include("ocdict.jl")
 include("http.jl")
-include("xml.jl")
 include("AWSException.jl")
 include("aws_names.jl")
 include("AWSCredentials.jl")
@@ -40,6 +36,9 @@ function arn(aws::SymbolDict, service,
 
     arn(service, resource, region, account)
 end
+
+
+LightXML.XML(r::Response) = XML(r.data)
 
 
 #------------------------------------------------------------------------------#
