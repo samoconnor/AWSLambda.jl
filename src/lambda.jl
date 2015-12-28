@@ -39,18 +39,15 @@ function lambda(aws, verb; path="", query="")
 
     r = do_request(r)
 
-    if length(r.data) > 0
-        r = JSON.parse(bytestring(r.data))
-        if isa(r, Dict)
-            r = SymbolDict(r)
-        end
+    if isa(r, Dict)
+        r = SymbolDict(r)
     end
 
     return r
 end
 
 
-list_lambdas(aws) = [SymbolDict(f) for f in lambda(aws, "GET")["Functions"]]
+list_lambdas(aws) = [SymbolDict(f) for f in lambda(aws, "GET")[:Functions]]
 
 
 function lambda_configuration(aws, name)

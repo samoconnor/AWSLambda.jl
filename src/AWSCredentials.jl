@@ -96,7 +96,7 @@ function aws_user_arn(c::AWSCredentials)
         aws = Dict(:creds => c, :region => "us-east-1")
         r = do_request(post_request(aws, "iam", "2010-05-08",
                                     Dict("Action" => "GetUser")))
-        XML(r)["GetUserResult"]["User"]["Arn"][1]
+        r["GetUserResult"]["User"]["Arn"]
     end
 end
 

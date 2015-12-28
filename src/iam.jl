@@ -41,7 +41,7 @@ end
 function iam_whoami(aws)
 
     r = iam(aws, Action = "GetUser")
-    XML(r)["GetUserResult"]["User"]["Arn"][1]
+    r["GetUserResult"]["User"]["Arn"]
 end
 
 
@@ -65,7 +65,7 @@ end
 function iam_create_access_key(aws, user_name)
 
     r = iam(aws, "CreateAccessKey", Dict("UserName" => user_name))
-    r = XML(r)["CreateAccessKeyResult"]["AccessKey"]
+    r = r["CreateAccessKeyResult"]["AccessKey"]
     AWSCredentials(r[:AccessKeyId], r[:SecretAccessKey])
 end
 
@@ -73,7 +73,6 @@ end
 function iam_delete_user(aws, user_name)
 
     r = iam(aws, "ListUserPolicies", Dict("UserName" => user_name))
-println(r.data)
 #    for {- policy} in 
 #                    ListUserPoliciesResult PolicyNames] {
         iam(aws, "DeleteUserPolicy", Dict("UserName" => user_name,

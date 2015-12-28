@@ -20,7 +20,7 @@ sdb(aws, query) = do_request(post_request(aws, "sdb", "2009-04-15", query))
 function sdb_list_domains(aws)
 
     r = sdb(aws, Dict("Action" => "ListDomains"))
-    return XML(r)["ListDomainsResult"]["DomainName"]
+    return r["ListDomainsResult"]["DomainName"]
 end
 
 
@@ -70,7 +70,7 @@ function sdb_get(aws, domain, item, attribute = "")
 
     r = sdb(aws, "GetAttributes", domain, item, request)
 
-    r = XML(r)["GetAttributesResult"]["Attribute"]["Name", "Value"]
+    r = r["GetAttributesResult"]["Attribute"]["Name", "Value"]
 
     if attribute != ""
         return r[attribtue]

@@ -54,7 +54,7 @@ function s3_get(aws, bucket, path; version="")
     @repeat 4 try
 
         r = s3(aws, "GET", bucket; path = path, version = version)
-        return r.data
+        return data(r)
 
     catch e
         @delay_retry if e.code in ["NoSuchBucket", "NoSuchKey"] end
@@ -174,8 +174,7 @@ s3_delete_bucket(aws, bucket) = s3(aws, "DELETE", bucket)
 
 function s3_list_buckets(aws)
 
-    r = s3(aws,"GET")
-    XML(r)["Buckets"]["Bucket"]["Name"]
+    s3(aws,"GET")["Buckets"]["Bucket"]["Name"]
 end
 
 
@@ -201,7 +200,6 @@ function s3_list_objects(aws, bucket, path = "")
         @repeat 4 try
 
             r = s3(aws, "GET", bucket; query = q)
-            r = XML(r)
 
             more = r["IsTruncated"] == "true"
             for e in get_elements_by_tagname(root(r), "Contents")
@@ -239,7 +237,6 @@ function s3_list_versions(aws, bucket, path="")
         end
 
         r = s3(aws, "GET", bucket; query = query)
-        r = XML(r)
         more = r["IsTruncated"][1] == "true"
 
         for e in child_elements(root(r))

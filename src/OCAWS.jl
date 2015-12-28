@@ -38,8 +38,6 @@ function arn(aws::SymbolDict, service,
 end
 
 
-LightXML.XML(r::Response) = XML(r.data)
-
 
 #------------------------------------------------------------------------------#
 # AWSRequest to Request.jl conversion.
@@ -91,7 +89,20 @@ end
 
 function http_request(r::AWSRequest, args...)
 
-    http_request(Request(r), get(r, :return_stream, false))
+    return_stream = get(r, :return_stream, false)
+
+    r = http_request(Request(r), return_stream)
+
+    if !return_stream && length(r.data) > 0
+        t = get(mimetype(r))
+        if ismatch(r"/xml$", t)
+            r = LightXML.parse_string(bytestring(r))
+        end
+        if ismatch(r"/json$", t)
+            r = JSON.parse(bytestring(r))
+        end
+    end
+    return r
 end
 
 

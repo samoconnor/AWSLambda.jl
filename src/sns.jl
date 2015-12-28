@@ -56,7 +56,7 @@ function sns_subscribe_sqs(aws, topic_name, queue; raw=flase)
                       "Protocol" => "sqs"))
 
     if raw
-        arn = XML(r)["SubscribeResult"]["SubscriptionArn"][1]
+        arn = r["SubscribeResult"]["SubscriptionArn"]
         sns(aws, "SetSubscriptionAttributes", topic_name,
                   SubscriptionArn = arn,
                   AttributeName = "RawMessageDelivery",

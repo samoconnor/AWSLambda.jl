@@ -17,6 +17,7 @@ import OCAWS: @repeat, @protected, @SymDict
 # XML Parsing tests
 #-------------------------------------------------------------------------------
 
+XML(x)=LightXML.parse_string(x)
 
 xml = """
 <CreateQueueResponse>
@@ -33,7 +34,7 @@ xml = """
 </CreateQueueResponse>
 """
 
-@test XML(xml)["CreateQueueResult"]["QueueUrl"][1] == 
+@assert XML(xml)["CreateQueueResult"]["QueueUrl"] == 
       "http://queue.amazonaws.com/123456789012/testQueue"
 
 
@@ -53,7 +54,7 @@ xml = """
 </GetUserResponse>
 """
 
-@test XML(xml)["GetUserResult"]["User"]["Arn"][1] == "arn:aws:iam::012541411202:root"
+@test XML(xml)["GetUserResult"]["User"]["Arn"] == "arn:aws:iam::012541411202:root"
 
 
 xml = """
@@ -148,7 +149,6 @@ xml = """
 @test XML(xml)["ListDomainsResult"]["DomainName"] == ["Domain1", "Domain2"]
 
 
-
 #-------------------------------------------------------------------------------
 # AWS Signature Version 4 test
 #-------------------------------------------------------------------------------
@@ -207,10 +207,19 @@ println("AWS4 Signature ok.")
 # Load credentials...
 #-------------------------------------------------------------------------------
 
-aws = aws_config(region = "ap-southeast-2", lambda_bucket = "ocaws.jl.lambdatest")
+aws = aws_config(lambda_bucket = "ocaws.jl.lambdatest")
 
 println(iam_whoami(aws))
 
+
+#-------------------------------------------------------------------------------
+# Lambda tests
+#-------------------------------------------------------------------------------
+
+println([l[:FunctionName] for l in list_lambdas(aws)])
+
+
+aws[:region] = "ap-southeast-2"
 
 
 #-------------------------------------------------------------------------------
@@ -375,7 +384,13 @@ s3_copy(aws, bucket_name, "key1";
 
 
 url = s3_sign_url(aws, bucket_name, "key1")
-@test readall(`curl -s -o - $url`) == "data1.v1"
+curl_output = ""
+@repeat 3 try
+    curl_output = readall(`curl -s -o - $url`)
+catch e
+    @delay_retry if true end
+end
+@test curl_output == "data1.v1"
 
 fn = "/tmp/jl_qws_test_key1"
 if isfile(fn)
@@ -477,7 +492,7 @@ sns_subscribe_sqs(aws, test_topic, qa; raw = true)
 
 sns_publish(aws, test_topic, "Hello SNS!")
 
-@repeat 5 try
+@repeat 6 try
 
     sleep(2)
     m = sqs_receive_message(qa)

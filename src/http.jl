@@ -8,7 +8,8 @@
 
 
 import URIParser: URI, query_params
-import Requests: format_query_str, process_response, open_stream, BodyDone
+import Requests: format_query_str, process_response, open_stream, BodyDone,
+                 data, mimetype
 import HttpCommon: Request, Response, STATUS_CODES
 import Base: show, UVError
 
