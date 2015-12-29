@@ -1,5 +1,5 @@
 #==============================================================================#
-# aws_names.jl
+# names.jl
 #
 # AWS Endpoint URLs and Amazon Resource Names.
 #
@@ -78,6 +78,16 @@ function arn(service, resource, region="", account="")
     end
 
     "arn:aws:$service:$region:$account:$resource"
+end
+
+
+function arn(aws::SymbolDict,
+             service,
+             resource,
+             region=get(aws, :region, ""),
+             account=aws_account_number(aws[:creds]))
+
+    arn(service, resource, region, account)
 end
 
 

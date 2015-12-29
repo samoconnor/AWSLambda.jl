@@ -40,8 +40,7 @@ end
 
 function iam_whoami(aws)
 
-    r = iam(aws, Action = "GetUser")
-    r["GetUserResult"]["User"]["Arn"]
+    iam(aws, Action = "GetUser")["User"]["Arn"]
 end
 
 

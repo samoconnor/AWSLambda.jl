@@ -30,8 +30,7 @@ function sqs_get_queue(aws, name)
     @protected try
 
         r = sqs(aws, Action="GetQueueUrl", QueueName = name)
-
-        url = r["GetQueueUrlResult"]["QueueUrl"]
+        url = r["QueueUrl"]
         return merge(aws, resource = URI(url).path)
 
     catch e
@@ -62,8 +61,7 @@ function sqs_create_queue(aws, name; options...)
 
     @repeat 4 try
 
-        r = sqs(aws, query)
-        url = r["CreateQueueResult"]["QueueUrl"]
+        url = sqs(aws, query)["QueueUrl"]
         return merge(aws, resource = URI(url).path)
 
     catch e
@@ -118,14 +116,14 @@ end
 function sqs_receive_message(queue)
 
     r = sqs(queue, Action="ReceiveMessage", MaxNumberOfMessages = "1")
-    r = r["ReceiveMessageResult"]
-    if r == ""
+    r = r["messages"]
+    if r == nothing
         return nothing
     end
 
-    handle  = r["Message"]["ReceiptHandle"]
-    message = r["Message"]["Body"]
-    md5     = r["Message"]["MD5OfBody"]
+    handle  = r[1]["ReceiptHandle"]
+    message = r[1]["Body"]
+    md5     = r[1]["MD5OfBody"]
 
     @assert md5 == hexdigest("md5", message)
 
@@ -154,7 +152,7 @@ function sqs_get_queue_attributes(queue)
         r = sqs(queue, Dict("Action" => "GetQueueAttributes",
                             "AttributeName.1" => "All"))
 
-        return r["GetQueueAttributesResult"]["Attribute"]["Name", "Value"]
+        return [i["Name"] => i["Value"] for i in r["Attributes"]]
 
     catch e
         @ignore if e.code == "AWS.SimpleQueueService.NonExistentQueue" end

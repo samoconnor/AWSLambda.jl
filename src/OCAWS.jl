@@ -7,34 +7,36 @@
 
 module OCAWS
 
+export sqs, sns, ec2, iam, sdb, s3, AWSConfig, aws_config, AWSRequest
+
 
 using Retry
 using SymDict
 using LightXML
 
 
-include("http.jl")
 include("AWSException.jl")
-include("aws_names.jl")
 include("AWSCredentials.jl")
+include("names.jl")
+include("http.jl")
+include("s3.jl")
+include("sqs.jl")
+include("sns.jl")
+include("iam.jl")
+include("sdb.jl")
+include("ec2.jl")
+include("lambda.jl")
 
 
-export sqs, sns, ec2, iam, sdb, s3,
-       AWSConfig, aws_config, AWSRequest
+
+#------------------------------------------------------------------------------#
+# Configuration.
+#------------------------------------------------------------------------------#
 
 
 function aws_config(;creds=AWSCredentials(), region="us-east-1", args...)
 
     @SymDict(creds, region, args...)
-end
-
-
-function arn(aws::SymbolDict, service,
-                              resource,
-                              region=get(aws, :region, ""),
-                              account=aws_account_number(aws[:creds]))
-
-    arn(service, resource, region, account)
 end
 
 
@@ -59,7 +61,9 @@ typealias AWSRequest SymbolDict
 #     :creds    => creds::AWSCredentials
 #     :verb     => "POST"
 #     :url      => "http://sdb.ap-southeast-2.amazonaws.com/"
-#     :content  => "Version=2009-04-15&Action=ListDomains"
+#     :headers  => Dict("Content-Type" =>
+#                       "application/x-www-form-urlencoded; charset=utf-8)
+#     :content  => "Version=2009-04-15&ContentType=JSON&Action=ListDomains"
 #     :resource => "/"
 #     :region   => "ap-southeast-2"
 #     :service  => "sdb"
@@ -72,13 +76,18 @@ function post_request(aws::AWSRequest,
 
     resource = get(aws, :resource, "/")
     url = aws_endpoint(service, aws[:region]) * resource
-    content = format_query_str(merge(query, "Version" => version))
 
-    @SymDict(verb = "POST", service, resource, url, query, content, aws...)
+    merge!(query, "Version" => version, "ContentType" => "JSON")
+    headers = Dict("Content-Type" =>
+                   "application/x-www-form-urlencoded; charset=utf-8")
+    content = format_query_str(query)
+
+    @SymDict(verb = "POST", service, resource, url, headers, query, content,
+             aws...)
 end
 
 
-# Convert AWSRequest dictionary into Request (Requests.jl)
+# Convert AWSRequest dictionary into Requests.Request (Requests.jl)
 
 function Request(r::AWSRequest)
     Request(r[:verb], r[:resource], r[:headers], r[:content], URI(r[:url]))
@@ -87,22 +96,8 @@ end
 
 # Call http_request for AWSRequest.
 
-function http_request(r::AWSRequest, args...)
-
-    return_stream = get(r, :return_stream, false)
-
-    r = http_request(Request(r), return_stream)
-
-    if !return_stream && length(r.data) > 0
-        t = get(mimetype(r))
-        if ismatch(r"/xml$", t)
-            r = LightXML.parse_string(bytestring(r))
-        end
-        if ismatch(r"/json$", t)
-            r = JSON.parse(bytestring(r))
-        end
-    end
-    return r
+function http_request(request::AWSRequest, args...)
+    http_request(Request(request), get(request, :return_stream, false))
 end
 
 
@@ -132,16 +127,9 @@ function do_request(r::AWSRequest)
     # Try request 3 times to deal with possible Redirect and ExiredToken...
     @repeat 3 try
 
-        # Configure default headers...
-        if !haskey(r, :headers)
-            r[:headers] = Dict()
-        end
+        # Default headers...
         r[:headers]["User-Agent"] = "JuliaAWS.jl/0.0.0"
         r[:headers]["Host"]       = URI(r[:url]).host
-        if !haskey(r[:headers], "Content-Type") && r[:verb] == "POST"
-            r[:headers]["Content-Type"] =
-                "application/x-www-form-urlencoded; charset=utf-8"
-        end
 
         # Load local system credentials if needed...
         if !haskey(r, :creds) || r[:creds].token == "ExpiredToken"
@@ -153,13 +141,14 @@ function do_request(r::AWSRequest)
 
         dump_aws_request(r)
 
-        return http_request(r)
+        # Send the request...
+        response = http_request(r)
 
     catch e
 
         # Handle HTTP Redirect...
-        @retry if http_status(e) in [301, 302, 307] && haskey(headers(e),
-                                                              "Location")
+        @retry if http_status(e) in [301, 302, 307] &&
+                  haskey(headers(e), "Location")
             r[:url] = headers(e)["Location"]
         end
 
@@ -171,23 +160,29 @@ function do_request(r::AWSRequest)
         end
     end
 
-    assert(false) # Unreachable.
+    # If there is reponse data check for (and parse) XML or JSON...
+    if typeof(response) == Response && length(response.data) > 0
+
+        mime = get(mimetype(response))
+
+        if ismatch(r"/xml$", mime)
+            response =  LightXML.parse_string(bytestring(response))
+        end
+
+        if ismatch(r"/json$", mime)
+            response = JSON.parse(bytestring(response))
+            @protected try 
+                action = r[:query]["Action"]
+                response = response[action * "Response"]
+                response = response[action * "Result"]
+            catch e
+                @ignore if typeof(e) == KeyError end
+            end
+        end
+    end
+
+    return response
 end
-
-
-
-#------------------------------------------------------------------------------#
-# Service APIs
-#------------------------------------------------------------------------------#
-
-
-include("s3.jl")
-include("sqs.jl")
-include("sns.jl")
-include("iam.jl")
-include("sdb.jl")
-include("ec2.jl")
-include("lambda.jl")
 
 
 

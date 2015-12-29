@@ -174,7 +174,7 @@ s3_delete_bucket(aws, bucket) = s3(aws, "DELETE", bucket)
 
 function s3_list_buckets(aws)
 
-    s3(aws,"GET")["Buckets"]["Bucket"]["Name"]
+    s3(aws,"GET", headers=Dict("Content-Type" => "application/json"))["Buckets"]["Bucket"]["Name"]
 end
 
 

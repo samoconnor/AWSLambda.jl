@@ -38,7 +38,7 @@ function AWSCredentials(access_key_id, secret_key, token="", user_arn="")
 
     c = AWSCredentials(access_key_id, secret_key, token, user_arn)
 
-    if u == ""
+    if user_arn == ""
         c.usr_arn = aws_user_arn(c)
     end
 
@@ -96,7 +96,7 @@ function aws_user_arn(c::AWSCredentials)
         aws = Dict(:creds => c, :region => "us-east-1")
         r = do_request(post_request(aws, "iam", "2010-05-08",
                                     Dict("Action" => "GetUser")))
-        r["GetUserResult"]["User"]["Arn"]
+        r["User"]["Arn"]
     end
 end
 

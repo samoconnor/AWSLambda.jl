@@ -32,6 +32,7 @@ function lambda(aws, verb; path="", query="")
         service  = "lambda",
         url      = aws_endpoint("lambda", aws[:region]) * resource,
         content  = query == "" ? "" : json(query),
+        headers  = Dict(),
         resource,
         verb,
         aws...
