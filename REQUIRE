@@ -1,5 +1,2 @@
 julia 0.4
-Retry
-SymDict
-LightXML
-URIParser 0.1.2
+AWSCore
