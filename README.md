@@ -1,21 +1,29 @@
-# AWSSNS
+# AWSLambda
 
-AWS SNS Interface for Julia
+AWS Lambda Interface for Julia
 
 ```julia
 using AWSSNS
-using AWSSQS
+using AWSLambda
 
-aws = AWSCore.aws_config()
 
-sns_create_topic(aws, "my-topic")
+aws = aws_config(region = "us-east-1", lambda_bucket = "ocaws.jl.lambdatest")
 
-q = sqs_get_queue(aws, "my-queue")
-sns_subscribe_sqs(aws, "my-topic", q; raw = true)
 
-sns_publish(aws, "my-topic", "Hello!")
+# Build a base Julia runtime...
+create_jl_lambda_base(aws, pkg_list = ["DataStructures",
+                                       "StatsBase",
+                                       "DataFrames",
+                                       "DSP",
+                                       "GZip"])
 
-m = sqs_receive_message(q)
-println(m["message"])
-sqs_delete_message(q, m)
+# Deploy a Lambda function to the cloud...
+f = @lambda aws function foo(a, b)
+
+    a * b
+end
+```
+
+# Execute 100 instances of the function in parallel...
+println(amap(f, [(i,i) for i = 1:100]))
 ```

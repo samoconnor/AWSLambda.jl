@@ -5,7 +5,7 @@
 #==============================================================================#
 
 
-using AWSSQS
+using AWSLambda
 using AWSSNS
 using Retry
 using Base.Test
@@ -17,39 +17,50 @@ AWSCore.set_debug_level(1)
 # Load credentials...
 #-------------------------------------------------------------------------------
 
-aws = AWSCore.aws_config(region="ap-southeast-2")
+aws = AWSCore.aws_config(region = "us-east-1",
+                         lambda_bucket = "ocaws.jl.lambdatest")
 
 
 
 #-------------------------------------------------------------------------------
-# SNS tests
+# Lambda tests
 #-------------------------------------------------------------------------------
 
-test_queue = "ocaws-jl-test-queue-" * lowercase(Dates.format(now(Dates.UTC),
-                                                             "yyyymmddTHHMMSSZ"))
+if false
+create_jl_lambda_base(aws, pkg_list = ["Requests",
+                                       "Nettle",
+                                       "LightXML",
+                                       "JSON",
+                                       "DataStructures",
+                                       "StatsBase",
+                                       "DataFrames",
+                                       "DSP",
+                                       "GZip",
+                                       "ZipFile",
+                                       "IniFile"])
+else
 
-qa = sqs_create_queue(aws, test_queue)
+f = @lambda aws function foo(a, b)
 
+    require("Requests")
+    require("Nettle")
+    require("LightXML")
+    require("JSON")
+    require("DataStructures")
+    require("StatsBase")
+    require("DataFrames")
+    require("DSP")
+    require("GZip")
+    require("ZipFile")
+    require("IniFile")
 
-test_topic = "ocaws-jl-test-topic-" * lowercase(Dates.format(now(Dates.UTC),
-                                                             "yyyymmddTHHMMSSZ"))
-
-sns_create_topic(aws, test_topic)
-
-sns_subscribe_sqs(aws, test_topic, qa; raw = true)
-
-sns_publish(aws, test_topic, "Hello SNS!")
-
-@repeat 6 try
-
-    sleep(2)
-    m = sqs_receive_message(qa)
-    @test m != nothing && m[:message] == "Hello SNS!"
-
-catch e
-    @retry if true end
+    readdir("/var")
 end
 
+
+println(amap(f, [(i,i) for i = 1:1]))
+
+end
 
 
 #==============================================================================#
