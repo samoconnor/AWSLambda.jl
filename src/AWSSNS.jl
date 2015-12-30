@@ -23,7 +23,10 @@ using SymDict
 sns_arn(aws, topic_name) = arn(aws, "sns", topic_name)
 
 
-sns(aws, query) = do_request(post_request(aws, "sns", "2010-03-31", query))
+function sns(aws, query)
+    query["ContentType"] = "JSON"
+    do_request(post_request(aws, "sns", "2010-03-31", query))
+end
 
 
 function sns(aws, action, topic; args...)
