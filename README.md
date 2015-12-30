@@ -22,7 +22,6 @@ f = @lambda aws function foo(a, b)
 
     a * b
 end
-```
 
 # Execute 100 instances of the function in parallel...
 println(amap(f, [(i,i) for i = 1:100]))
