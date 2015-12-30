@@ -1,16 +1,17 @@
-# AWSS3
+# AWSSQS
 
-AWS S3 Interface for Julia
-
+AWS SQS Interface for Julia
 
 ```julia
-using AWSS3
+using AWSSQS
 
 aws = AWSCore.aws_config()
 
-s3_create_bucket(aws, "my.bucket")
-s3_enable_versioning(aws, "my.bucket")
+q = sqs_get_queue(aws, "my-queue")
 
-s3_put(aws, "my.bucket", "key", "Hello!")
-println(s3_get(aws, "my.bucket", "key"))
+sqs_send_message(q, "Hello!")
+
+m = sqs_receive_message(q)
+println(m["message"])
+sqs_delete_message(q, m)
 ```
