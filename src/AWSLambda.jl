@@ -22,7 +22,7 @@ using AWSCore
 using AWSS3
 using AWSIAM
 using JSON
-using ZipFile
+using ZIP
 using Retry
 using SymDict
 
@@ -169,7 +169,7 @@ function create_py_lambda(aws, name, py_code)
     delete_lambda(aws, name)
 
     # Create .ZIP file containing "py_code"...
-    zip = zipdict("$name.py" => py_code)
+    zip = create_zip("$name.py" => py_code)
 
     # Upload .ZIP file to S3...
     zip_filename = "ocaws_lambda_$name.zip"
