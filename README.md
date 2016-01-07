@@ -2,6 +2,8 @@
 
 AWS Lambda Interface for Julia
 
+[![Build Status](https://travis-ci.org/samoconnor/AWSLambda.jl.svg)](https://travis-ci.org/samoconnor/AWSLambda.jl)
+
 ```julia
 using AWSSNS
 using AWSLambda
