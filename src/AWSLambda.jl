@@ -22,9 +22,10 @@ using AWSCore
 using AWSS3
 using AWSIAM
 using JSON
-using ZIP
+using InfoZIP
 using Retry
 using SymDict
+using DataStructures
 
 import Nettle: hexdigest
 
@@ -125,7 +126,7 @@ type AWSLambdaException <: Exception
 end
 
 
-function show(io::IO, e::AWSLambdaException)
+function Base.show(io::IO, e::AWSLambdaException)
 
     println(io, string("AWSLambdaException \"", e.name, "\":\n", e.message, "\n"))
 end
@@ -189,7 +190,7 @@ end
 # Implemented using Python zipfile library running on AWS Lambda
 # (to avoid downloading/uploading .ZIP to/from local machine).
 
-function update_lambda_zip(aws, key, files::Dict)
+function update_lambda_zip(aws, key, files::Associative)
 
     lambda_name = "ocaws_update_lambda_zip"
 
@@ -251,6 +252,63 @@ function jl_lambda_hash(aws, name)
 end
 
 
+function commondir(dirs::Array)
+
+    @assert length(dirs) > 0
+
+    # Find longest common prefix...
+    i = 1
+    for i = 1:length(dirs[1])
+        if any(f -> length(f) < i || f[1:i] != dirs[1][1:i], dirs)
+            break
+        end
+    end
+
+    # Ensure prefix is a dir path...
+    while i > 0 && any(f->!isdirpath(f[1:i]), dirs)
+        i -= 1
+    end
+
+    return dirs[1][1:i]
+end
+
+
+function find_module_files(modules)
+
+    # Find subset of LOAD_PATH that contains required "modules"...
+    load_path = []
+    missing = [m=>nothing for m in modules]
+
+    for d in LOAD_PATH
+        for m in modules
+            if isfile(joinpath(d, m))
+                push!(load_path, abspath(d))
+                delete!(missing, m)
+                break
+            end
+        end
+    end
+    if !isempty(missing)
+        throw(AWSLambdaException("find_module_files",
+                                 "Can't find: $(join(keys(missing), " "))"))
+    end
+
+    # Trim common path from load_path...
+    common = commondir(load_path)
+    load_path = [f[length(common)+1:end] for f in load_path]
+
+    # Collect ".jl" files in module directories...
+    files = OrderedDict()
+    for d in load_path
+        for f in filter(f->ismatch(r".jl$", f), readdir(joinpath(common, d)))
+            files[joinpath(d, f)] = readall(joinpath(common, d, f))
+        end
+    end
+
+    return load_path, files
+end
+
+
 # Create an AWS Lambda to run "jl_code".
 # The Julia runtime is copied from "aws[:lambda_bucket]/jl_lambda_base.zip".
 # "jl_code" is added to the .ZIP as "$name.jl".
@@ -258,18 +316,13 @@ end
 
 function create_jl_lambda(aws, name, jl_code)
 
-    new_code_hash = hexdigest("sha256", jl_code)
-    old_code_hash = jl_lambda_hash(aws, name)
-
-    # Don't create a new lambda one already exists with same code...
-    if new_code_hash == old_code_hash
-        return
+    # Collect files for extra modules...
+    if haskey(aws, :lambda_modules)
+        load_path, jl_files = find_module_files(aws[:lambda_modules])
+    else
+        load_path, jl_files = ("", OrderedDict())
     end
-
-    # Delete old lambda with same name...
-    if old_code_hash != nothing
-        delete_lambda(aws, name)
-    end
+    load_path = "[$(join(["'$d'" for d in load_path], ","))]"
 
     # Wrapper to set up Julia environemnt and run "jl_code"...
     const lambda_py_wrapper =
@@ -284,7 +337,9 @@ function create_jl_lambda(aws, name, jl_code)
         # Set Julia package directory...
         root = os.environ['LAMBDA_TASK_ROOT']
         os.environ['HOME'] = '/tmp/'
-        os.environ['JULIA_PKGDIR'] = root + "/julia"
+        os.environ['JULIA_PKGDIR'] = root + '/julia'
+        load_path = ':'.join([root + '/' + d for d in $load_path])
+        os.environ['JULIA_LOAD_PATH'] = load_path
 
         # Clean up old return value file...
         if os.path.isfile('/tmp/lambda_out'):
@@ -312,13 +367,31 @@ function create_jl_lambda(aws, name, jl_code)
         return {'stdout': out}
     """
 
+
+    # Add python wrapper and julia code to .ZIP file...
+    merge!(jl_files, OrderedDict("$name.py" => lambda_py_wrapper,
+                                 "$name.jl" => jl_code))
+
+    new_code_hash = hexdigest("sha256", serialize64(jl_files))
+    old_code_hash = jl_lambda_hash(aws, name)
+
+    # Don't create a new lambda one already exists with same code...
+    if new_code_hash == old_code_hash
+        return
+    end
+
+    # Delete old lambda with same name...
+    if old_code_hash != nothing
+        delete_lambda(aws, name)
+    end
+
     # Make a copy of base Julia system .ZIP file...
     zip_file= "jl_lambda_$(name)_$(new_code_hash).zip"
     s3_copy(aws, aws[:lambda_bucket], "jl_lambda_base.zip", to_path=zip_file)
 
-    # Add python wrapper and julia code to .ZIP file...
-    update_lambda_zip(aws, zip_file, Dict("$name.py" => lambda_py_wrapper,
-                                          "$name.jl" => jl_code))
+    # Add new files to .ZIP...
+    update_lambda_zip(aws, zip_file, jl_files)
+
     # Deploy the lambda to AWS...
     create_lambda(aws, name, zip_file, MemorySize=1024,
                                        Description=new_code_hash)
@@ -399,7 +472,6 @@ macro lambda(aws::Symbol, f::Expr)
     f.args[2] = quote
         jl_data = serialize64($(Expr(:tuple, args...)))
         r = invoke_lambda($aws, $name, Dict(:jl_data => jl_data))
-        dump(r)
         try 
             return deserialize64(r[:jl_data])
         end
