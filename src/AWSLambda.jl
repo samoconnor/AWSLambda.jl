@@ -15,7 +15,7 @@ __precompile__()
 
 export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        create_jl_lambda, invoke_jl_lambda,
-       @lambda, amap, serialize64, deserialize64,
+       @λ, @lambda, amap, serialize64, deserialize64,
        lambda_compilecache,
        create_jl_lambda_base
 
@@ -403,12 +403,16 @@ function create_jl_lambda(aws, name, jl_code, modules=[])
     update_lambda_zip(aws, zip_file, jl_files)
 
     # Deploy the lambda to AWS...
-    create_lambda(aws, name, zip_file, MemorySize=1024,
-                                       Description=new_code_hash)
+    r = create_lambda(aws, name, zip_file, MemorySize=1024,
+                                           Description=new_code_hash)
 
     # Download .ji cache from the lambda sandbox.
     r = invoke_lambda(aws, name, jl_precompile = true)
     ji_cache = deserialize64(r[:jl_data])
+
+    if isempty(ji_cache)
+        return r
+    end
 
     # Delete lambda...
     delete_lambda(aws, name)
@@ -497,9 +501,6 @@ macro lambda(aws::Symbol, f::Expr)
         mkpath("/tmp/jl_cache")
         insert!(Base.LOAD_CACHE_PATH, 1, "/tmp/jl_cache")
 
-        println("tmp Cache: ", join(readdir(Base.LOAD_CACHE_PATH[1]), ","))
-        println("zip Cache: ", join(readdir(Base.LOAD_CACHE_PATH[2]), ","))
-
         using JSON
 
         $modules
@@ -546,6 +547,10 @@ macro lambda(aws::Symbol, f::Expr)
         $(esc(f))
         $(Expr(:tuple, args...)) -> $(esc(name))($(esc(aws)), $(args...))
     end
+end
+
+macro λ(aws::Symbol, f::Expr)
+    esc(:(@lambda $aws $f))
 end
 
 

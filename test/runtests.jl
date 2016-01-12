@@ -39,68 +39,76 @@ aws = AWSCore.aws_config(
                                            ])
 
 
+#create_jl_lambda_base(aws)
+
 #using AWSS3
 #s3_copy(aws, "ocaws.jl.lambdatest", "jl_lambda_base.zip",
 #             to_bucket="ocaws.jl.lambdatest.tokyo", to_path= "jl_lambda_base.zip")
+
+
 
 #-------------------------------------------------------------------------------
 # Lambda tests
 #-------------------------------------------------------------------------------
 
 
-if false
-create_jl_lambda_base(aws)
-else
+# Count primes in the cloud...
 
-
-push!(LOAD_PATH, "/Users/sam/git/octech/pkg/software/oclib")
-#aws[:lambda_modules] = ["OCUtil.jl"]
-
-
-f = @lambda aws function foo(a, b::Int)
-
-#    using Requests
-#    using Nettle
-#    using LightXML
-#    using JSON
-#    using DataStructures
-#    using StatsBase
-#    using DataFrames
-#    using DSP
-#    using GZip
-#    using ZipFile
-#    using IniFile
-    using OCUtil
-#    using SymDict
-#    using XMLDict
-#    using Retry
-
-    fnv32(Array{UInt8}([1,2,3,4,5,6,7,8,9,0,1,2, a, b]))
+λ = @λ aws function count_primes(low::Int, high::Int)
+    count = length(primes(low, high))
+    println("$count primes between $low and $high.")
+    return count
 end
 
-for i = 1:4
-    println(i % 2 == 0 ? f(i,i) : foo(aws,i,i))
+
+# Count primes in parallel...
+
+function count_primes(low::Int, high::Int)
+    w = 500000000
+    counts = amap(λ, [(i, min(high,i + w)) for i = low:w:high])
+    count = sum(counts)
+    println("$count primes between $low and $high.")
+    return count
 end
 
-#=
-@lambda aws function lambda_compilecache(name)
+@test count_primes(10, 10000000000) == 455052507
 
-    ji = nothing
-    mktempdir() do tmp
-        insert!(Base.LOAD_CACHE_PATH, 1, tmp)
-        ji = open(readbytes, compilecache(name))
+
+
+mktempdir() do tmp
+    cd(tmp) do
+
+        # Create a test module under "tmp"...
+
+        mkpath("TestModule")
+        open(io->write(io, """
+            module TestModule
+
+            export test_function
+
+            __precompile__()
+
+            test_function(x) = x * x
+
+            end
+        """), "TestModule/TestModule.jl", "w")
+
+        push!(LOAD_PATH, "TestModule")
+
+        # Create a lambda that uses the TestModule...
+        λ = @λ aws function lambda_test(x)
+
+            # Check that precompile cache is being used...
+            @assert !Base.stale_cachefile("/var/task/TestModule/TestModule.jl",
+                                          "/var/task/TestModule.ji")
+            using TestModule
+            return test_function(x)
+        end
+
+        @test λ(4) == 16
     end
-    return ji
 end
 
-println(amap(f, [(i,i) for i = 1:1]))
-
-=#
-
-#println(lambda_compilecache(aws, "OCUtil"))
-
-
-end
 
 
 #==============================================================================#
