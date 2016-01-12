@@ -14,7 +14,9 @@ module AWSLambda
 __precompile__()
 
 export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
-       create_jl_lambda, @lambda, amap, serialize64, deserialize64,
+       create_jl_lambda, invoke_jl_lambda,
+       @lambda, amap, serialize64, deserialize64,
+       lambda_compilecache,
        create_jl_lambda_base
 
 
@@ -36,7 +38,7 @@ import Nettle: hexdigest
 #-------------------------------------------------------------------------------
 
 
-function lambda(aws, verb; path="", query="")
+function lambda(aws::SymbolDict, verb; path="", query="")
 
     resource = "/2015-03-31/functions/$path"
 
@@ -194,6 +196,12 @@ function update_lambda_zip(aws, key, files::Associative)
 
     lambda_name = "ocaws_update_lambda_zip"
 
+#    delete_lambda(aws, lambda_name)
+
+    files = [n => base64encode(v) for (n,v) in files]
+
+#    println("update_lambda_zip($key, $(keys(files)))")
+
     @repeat 2 try
 
         # Call lambda function to update ZIP stored in S3...
@@ -228,7 +236,7 @@ function update_lambda_zip(aws, key, files::Associative)
                         info = zipfile.ZipInfo(file)
                         info.compress_type = zipfile.ZIP_DEFLATED
                         info.external_attr = 0777 << 16L
-                        z.writestr(info, event['files'][file])
+                        z.writestr(info, event['files'][file].decode('base64'))
 
                 # Re-upload zip file...
                 bucket.upload_file('/tmp/lambda.zip', event['key'])
@@ -259,7 +267,7 @@ function commondir(dirs::Array)
     # Find longest common prefix...
     i = 1
     for i = 1:length(dirs[1])
-        if any(f -> length(f) < i || f[1:i] != dirs[1][1:i], dirs)
+        if any(f -> length(f) <= i || f[1:i] != dirs[1][1:i], dirs)
             break
         end
     end
@@ -281,7 +289,7 @@ function find_module_files(modules)
 
     for d in LOAD_PATH
         for m in modules
-            if isfile(joinpath(d, m))
+            if isfile(joinpath(d, "$m.jl"))
                 push!(load_path, abspath(d))
                 delete!(missing, m)
                 break
@@ -314,11 +322,12 @@ end
 # "jl_code" is added to the .ZIP as "$name.jl".
 # A Python wrapper ("$name.py") is passes the .jl file to bin/julia.
 
-function create_jl_lambda(aws, name, jl_code)
+function create_jl_lambda(aws, name, jl_code, modules=[])
 
     # Collect files for extra modules...
-    if haskey(aws, :lambda_modules)
-        load_path, jl_files = find_module_files(aws[:lambda_modules])
+    modules = filter(m -> !(m in aws[:lambda_packages]), modules)
+    if modules != []
+        load_path, jl_files = find_module_files(modules)
     else
         load_path, jl_files = ("", OrderedDict())
     end
@@ -362,7 +371,8 @@ function create_jl_lambda(aws, name, jl_code)
         # Return content of output file...
         if os.path.isfile('/tmp/lambda_out'):
             with open('/tmp/lambda_out', 'r') as f:
-                return {'jl_data': f.read()}
+                return {'jl_data': f.read(),
+                        'stdout': out}
 
         return {'stdout': out}
     """
@@ -395,6 +405,20 @@ function create_jl_lambda(aws, name, jl_code)
     # Deploy the lambda to AWS...
     create_lambda(aws, name, zip_file, MemorySize=1024,
                                        Description=new_code_hash)
+
+    # Download .ji cache from the lambda sandbox.
+    r = invoke_lambda(aws, name, jl_precompile = true)
+    ji_cache = deserialize64(r[:jl_data])
+
+    # Delete lambda...
+    delete_lambda(aws, name)
+
+    # Add .jl files to .ZIP...
+    update_lambda_zip(aws, zip_file, ji_cache)
+
+    # Re-deploy the lambda to AWS with precompile cache...
+    create_lambda(aws, name, zip_file, MemorySize=1024,
+                                       Description=new_code_hash)
 end
 
 
@@ -411,6 +435,22 @@ end
 function deserialize64(a)
 
     deserialize(Base64DecodePipe(IOBuffer(a)))
+end
+
+
+# Invoke a Julia AWS Lambda function.
+# Serialise "args" and deserialise result.
+
+function invoke_jl_lambda(aws, name, args...)
+
+    r = invoke_lambda(aws, name, jl_data = serialize64(args))
+    try
+        println(r[:stdout])
+    end
+    try
+        return deserialize64(r[:jl_data])
+    end
+    return r
 end
 
 
@@ -440,21 +480,46 @@ macro lambda(aws::Symbol, f::Expr)
     name = call.args[1]
     args = call.args[2:end]
 
+    # Split "using module" lines out of body...
+    modules = Expr(:block, filter(e->isa(e, Expr) && e.head == :using, body.args)...)
+    body.args = filter(e->!isa(e, Expr) || e.head != :using, body.args)
+
+    # Fix up LineNumberNodes...
+    body = eval(Expr(:quote, body))
+
     get_args = join(["""get(args,"$a","")""" for a in args], ", ")
 
     jl_code =
     """
+        eval(Base, :(is_interactive = true))
+
+        insert!(Base.LOAD_CACHE_PATH, 1, ENV["LAMBDA_TASK_ROOT"])
+        mkpath("/tmp/jl_cache")
+        insert!(Base.LOAD_CACHE_PATH, 1, "/tmp/jl_cache")
+
+        println("tmp Cache: ", join(readdir(Base.LOAD_CACHE_PATH[1]), ","))
+        println("zip Cache: ", join(readdir(Base.LOAD_CACHE_PATH[2]), ","))
+
         using JSON
 
+        $modules
+
         function $call
-            $(string(eval(Expr(:quote, body))))
+            $body
         end
 
         args = JSON.parse(STDIN)
 
         out = open("/tmp/lambda_out", "w")
 
-        if haskey(args, "jl_data")
+        if haskey(args, "jl_precompile")
+
+            cd("/tmp/jl_cache")
+            b64_out = Base64EncodePipe(out)
+            serialize(b64_out, [f => open(readbytes, f) for f in readdir()])
+            close(b64_out)
+
+        elseif haskey(args, "jl_data")
 
             args = deserialize(Base64DecodePipe(IOBuffer(args["jl_data"])))
             b64_out = Base64EncodePipe(out)
@@ -462,25 +527,24 @@ macro lambda(aws::Symbol, f::Expr)
             close(b64_out)
 
         else
-
             JSON.print(out, $name($get_args))
         end
 
         close(out)
     """
 
-    f.args[2] = quote
-        jl_data = serialize64($(Expr(:tuple, args...)))
-        r = invoke_lambda($aws, $name, Dict(:jl_data => jl_data))
-        try 
-            return deserialize64(r[:jl_data])
-        end
-        return r
-    end
+    # Add "aws" dict as first arg...
+    insert!(f.args[1].args, 2, aws)
+
+    # Replace function body with Lambda invocation...
+    f.args[2] = :(invoke_jl_lambda($aws, $name, $(args...)))
+
+    modules = [string(m.args[1]) for m in modules.args]
 
     quote
-        create_jl_lambda($(esc(aws)), $(string(name)), $jl_code)
+        create_jl_lambda($(esc(aws)), $(string(name)), $jl_code, $modules)
         $(esc(f))
+        $(Expr(:tuple, args...)) -> $(esc(name))($(esc(aws)), $(args...))
     end
 end
 
@@ -522,8 +586,13 @@ end
 # Takes about 1 hour, (or about 5 minutes if full rebuild is not done).
 # Upload the Julia runtime to "aws[:lambda_bucket]/jl_lambda_base.zip".
 
-function create_jl_lambda_base(aws; pkg_list = ["JSON"],
-                                     release = "release-0.4")
+function create_jl_lambda_base(aws; release = "release-0.4")
+
+    pkg_list = aws[:lambda_packages]
+    if !("JSON" in pkg_list)
+        push!(pkg_list, "JSON")
+    end
+
     server_config = [(
 
         "cloud_config.txt", "text/cloud-config",
@@ -573,7 +642,7 @@ function create_jl_lambda_base(aws; pkg_list = ["JSON"],
 
             # Build and install Julia under /var/task...
             make -j2 prefix= DESTDIR=/var/task all
-            make prefix= DESTDIR=/var/task install 
+            make prefix= DESTDIR=/var/task install
 
             # Save tarball of raw Julia build...
             cd /
