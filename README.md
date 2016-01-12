@@ -39,7 +39,7 @@ It takes about 1 hour to do a full build the first time.
 After that rebuilds take about 5 minutes._
 
 
-Deploy a Lambda function to cound prime numbers...
+Deploy a Lambda function to count prime numbers...
 
 ```julia
 λ = @λ aws function count_primes(low::Int, high::Int)
@@ -48,8 +48,12 @@ Deploy a Lambda function to cound prime numbers...
     return count
 end
 ```
+_The @λ macro creates an AWS Lambda named "count_primes". It wraps the body
+of the function with serialisation/deserialistion code and packages it into
+a .ZIP file. The .ZIP file deployed to AWS. The @λ macro returns an
+anonymous function that can be called to invoke the Lambda._
 
-Run 20 instances in parallel...
+Run 20 instances of λ in parallel using `amap()`...
 
 ```julia
 function count_primes(low::Int, high::Int)
@@ -94,3 +98,8 @@ end
 
 @test λ(4) == 16
 ```
+_The @λ macro sees the `using` statement and bundles the corresponding `.jl`
+files into the deployment .ZIP file. It then does a dry-run invocation to
+trigger module precompilation. The resulting '.ji' files are retrieved from
+the Lambda sandbox and added to the deployment .ZIP file. Subsequent calls
+do not have to wait for compilation._
