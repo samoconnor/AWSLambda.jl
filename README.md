@@ -8,6 +8,7 @@ AWS Lambda Interface for Julia
 Start by creating a basic AWSCore configuration...
 
 ```julia
+using AWSCore
 using AWSLambda
 aws = aws_config(region = "us-east-1")
 ```
@@ -16,6 +17,7 @@ aws = aws_config(region = "us-east-1")
 Set up a bucket to store Lambda .ZIP files...
 
 ```julia
+using AWSS3
 s3_create_bucket(aws, "com.me.jl_lambda")
 aws[:lambda_bucket] = "com.me.jl_lambda")
 ```
