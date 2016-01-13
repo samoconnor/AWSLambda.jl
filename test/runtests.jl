@@ -60,6 +60,8 @@ aws = AWSCore.aws_config(
     return count
 end
 
+@test invoke_lambda(aws, "count_primes", low = 10, high = 100)[:jl_data] == "21"
+
 
 # Count primes in parallel...
 

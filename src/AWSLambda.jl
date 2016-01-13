@@ -491,7 +491,8 @@ macro lambda(aws::Symbol, f::Expr)
     # Fix up LineNumberNodes...
     body = eval(Expr(:quote, body))
 
-    get_args = join(["""get(args,"$a","")""" for a in args], ", ")
+    arg_names = [isa(a, Expr) ? a.args[1] : a for a in args]
+    get_args = join(["""get(args,"$a",nothing)""" for a in arg_names], ", ")
 
     jl_code =
     """
