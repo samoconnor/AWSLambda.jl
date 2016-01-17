@@ -5,9 +5,12 @@
 #==============================================================================#
 
 
+using AWSCore
 using AWSLambda
 using AWSSNS
 using Retry
+using SymDict
+using JSON
 using Base.Test
 
 AWSCore.set_debug_level(1)
@@ -38,6 +41,13 @@ aws = AWSCore.aws_config(
                                             "Retry"
                                            ])
 
+
+#for api in apigateway_restapis(aws)
+#    apigateway(aws, "DELETE", "/restapis/$(api["id"])")
+#end
+
+apigateway_create(aws, "count_primes", (:low, :high))
+exit(0)
 
 #create_jl_lambda_base(aws)
 

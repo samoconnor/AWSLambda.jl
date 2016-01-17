@@ -17,7 +17,8 @@ export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        create_jl_lambda, invoke_jl_lambda,
        @λ, @lambda, amap, serialize64, deserialize64,
        lambda_compilecache,
-       create_jl_lambda_base
+       create_jl_lambda_base,
+       apigateway, apigateway_restapis, apigateway_create
 
 
 using AWSCore
@@ -728,6 +729,90 @@ function create_jl_lambda_base(aws; release = "release-0.4")
                     KeyName      = "ssh-ec2",
                     UserData     = server_config,
                     Policy       = policy)
+end
+
+
+
+#-------------------------------------------------------------------------------
+# API Gateway support http://docs.aws.amazon.com/apigateway/
+#-------------------------------------------------------------------------------
+
+hallink(hal, name) = hal["_links"][name]["href"]
+
+
+function apigateway(aws::SymbolDict, verb, resource="/restapis", query=Dict())
+
+    r = @SymDict(
+        service  = "apigateway",
+        url      = AWSCore.aws_endpoint("apigateway", aws[:region]) * resource,
+        content  = isempty(query) ? "" : json(query),
+        headers  = Dict(),
+        resource,
+        verb,
+        aws...
+    )
+
+    r = AWSCore.do_request(r)
+
+    return r
+end
+
+
+function apigateway(aws::SymbolDict, verb, resource; args...)
+    apigateway(aws, verb, resource, Dict(args))
+end
+
+
+function apigateway_restapis(aws)
+    r = apigateway(aws, "GET", "/restapis")
+    if haskey(r, "_embedded")
+        r = r["_embedded"]
+        r = get(r, "item", r)
+        if !isa(r, Vector)
+            r = [r]
+        end
+    else
+        r = []
+    end
+    return r
+end
+
+
+function apigateway_lambda_arn(aws, name)
+    name = arn(aws, "lambda", "function:$name")
+    f = "/2015-03-31/functions/$name/invocations"
+    "arn:aws:apigateway:$(aws[:region]):lambda:path$f"
+end
+
+
+function apigateway_create(aws, name, args)
+
+    lambda_arn = apigateway_lambda_arn(aws, name)
+    api = apigateway(aws, "POST", "/restapis", name = name)
+    id = api["id"]
+    method = "$(hallink(api, "resource:create"))/methods/GET"
+    params = Dict(["method.request.querystring.$a" => false for a in args])
+    map = "{\n$(join(["\"$a\" : \$input.params(\"$a\")" for a in args], ",\n"))\n}"
+
+    apigateway(aws, "PUT", method,
+               authorizationType = "NONE",
+               requestParameters = params)
+
+    apigateway(aws, "PUT", "$method/responses/200",
+               "responseModels" => Dict("application/json" => "Empty"))
+
+    apigateway(aws, "PUT", "$method/integration/", Dict(
+               "type" => "AWS", "httpMethod" => "POST", "uri" => lambda_arn,
+               "requestTemplates" => Dict("application/json" => map)))
+
+    apigateway(aws, "PUT", "$method/integration/responses/200",
+               responseTemplates = Dict("application/json" => nothing))
+
+    lambda(aws, "POST"; path="$name/policy", query=Dict(
+           "Action" => "lambda:InvokeFunction",
+           "Principal" => "apigateway.amazonaws.com",
+           "SourceArn" => arn(aws, "execute-api", "$id/*/GET/"),
+           "StatementId" => "apigateway_$(id)_GET"))
 end
 
 

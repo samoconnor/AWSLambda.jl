@@ -1,17 +1,13 @@
-language: cpp
-compiler:
-  - clang
+language: julia
+os:
+- linux
+- osx
+julia:
+- release
+- nightly
 notifications:
   email: false
 env:
-  matrix:
-    - JULIAVERSION="juliareleases"
-    - JULIAVERSION="julianightlies"
-before_install:
-  - sudo add-apt-repository ppa:staticfloat/julia-deps -y
-  - sudo add-apt-repository ppa:staticfloat/${JULIAVERSION} -y
-  - sudo apt-get update -qq -y
-  - sudo apt-get install libpcre3-dev julia -y
-  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
-script:
-  - julia -e 'Pkg.init(); Pkg.clone(pwd()); Pkg.test("OCAWS")'
+  global:
+  - secure: LuJKj8BSXSqiA6YCLTzKQ380vzPUfreSGrwhy2sRHhvTzTu9tsPOZPZ0VWetNp864EsjhYXxcEE8Ys9Xtd7gzN9cxdrKrZAFXRs9NgI5yr+poaoam+z3fYHLe4ljuShPpVCWNLCU+HnDlRmUm+u3JABUx76bOG1e11Wk4qWj0a9f/Pp7QbJxA9oBlbxGmMDxRJu0xz6KyGWzGXFlr5e0YfmYruQp4rPjv6lAmHIseBCKs/PYfXdPSnE7xQmC3b0o97KK1MJij3n3iRet6xSk3pKVvNgNDgc13yXx+1hcUowDOTFALA/O/8TMXgfzoeDoQVXdYBby+Umkbkjnay3KDP7SVhluxrENUwJKwdygbFB/J09i/K51QklSjY0KmdCJj83c25itxhOH5abyCAHpVQ02dt0Io3jAP5+/5+rzJ7HTqejqLBbbZziakpP0O8bf2V5QlNDQevcihfIldVCf4jAzSSPTnoBYSPXOadKchZmlmkL2daWS2fV8292mWrphs16NN7c8zaAvaoDyl2JkCES2fB0O06KIaB5MVoiWSEZpZrBBbY4CAdXej1gkj9QFdYHtOhBUECBfgYKewM1vPGbuyDHVSgkVeEvlWjJJZAWgJAjLC+HJ5qoJ4No7+Y1kCPi0Aenhsp+rRq5052t0cKi540TZVRtHr5AdF5I1RH8=
+  - secure: JdY2ExX2ro1zNIB1qzUiv7jZ8Vs3MhAzCnLc3qAEETsnPoFxvKmBH4gjH1saVBmDBSNLwA6fuZZTod1DMzezDEtqab/MBUxnc9n1TX35GdJwQJJXLfDrxWgZUWW7DN1ydo17l3iTvOXW1E5rt1+BC5ZHZWelvOmXdwv6M8H5Bfvw1Yg1BYzGl1cDPQXBa1W3Xn5O/86fSzaOsYcQkBOUv0EPwVRp6KT99ixi1Nw1sXq1mmSYcGe7UghhYQh94obzu3bJWZcjm9yzBF3MjM4L6n99Y0vQbK/MqffJQCA9Kk3to3pltOwrQ4vdYRDHsZqQSPlrG7Gbkz/eZ1MkED5r2pKAngyTRKiAK4oXFpcH5AMf1UL0Jge1YBhc1R9HdNIybPkCvmt5e1hZg2Hzh3xTuovDZgCMiueZA+xit6KwMn869QZoRBP+olYzvgpM1KtQuehPpkMaIgldgkKagTZqpAzQL6L9tdNSVcncTgQGUQ3ALtlP5KYcF0snKJdq4lxNiblWQn7RGLSSx7WuQ0NZufDwh225k/4CWmrIgsTF/VTARLAJedPslYH811LF1uhn0G+kAWq4XIHIIFzksgtFx3KJpVVuR9kim8ySO2GghEv0iPRG9ANFoz4PQ6y5zCkwiGP0RIR20JthTNPxfR6/ldg3Jra2yc5rVvsdbTF/Obo=
