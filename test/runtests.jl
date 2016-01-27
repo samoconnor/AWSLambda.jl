@@ -41,14 +41,6 @@ aws = AWSCore.aws_config(
                                             "Retry"
                                            ])
 
-
-#for api in apigateway_restapis(aws)
-#    apigateway(aws, "DELETE", "/restapis/$(api["id"])")
-#end
-
-apigateway_create(aws, "count_primes", (:low, :high))
-exit(0)
-
 #create_jl_lambda_base(aws)
 
 #using AWSS3
@@ -119,6 +111,24 @@ mktempdir() do tmp
 
         @test λ(4) == 16
     end
+end
+
+
+
+#-------------------------------------------------------------------------------
+# API Gateway tests
+#-------------------------------------------------------------------------------
+
+
+if false
+
+for api in apigateway_restapis(aws)
+    apigateway(aws, "DELETE", "/restapis/$(api["id"])")
+end
+
+
+apigateway_create(aws, "count_primes", (:low, :high))
+
 end
 
 
