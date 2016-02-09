@@ -14,10 +14,10 @@ module AWSLambda
 __precompile__()
 
 export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
-       create_jl_lambda, invoke_jl_lambda,
+       async_lambda, create_jl_lambda, invoke_jl_lambda, create_lambda_role,
        @λ, @lambda, amap, serialize64, deserialize64,
        lambda_compilecache,
-       create_jl_lambda_base,
+       create_jl_lambda_base, merge_lambda_zip,
        apigateway, apigateway_restapis, apigateway_create
 
 
@@ -29,6 +29,8 @@ using InfoZIP
 using Retry
 using SymDict
 using DataStructures
+using Glob
+using Base.Pkg
 
 import Nettle: hexdigest
 
@@ -39,7 +41,7 @@ import Nettle: hexdigest
 #-------------------------------------------------------------------------------
 
 
-function lambda(aws::SymbolDict, verb; path="", query="")
+function lambda(aws::SymbolDict, verb; path="", query="", headers = Dict())
 
     resource = "/2015-03-31/functions/$path"
 
@@ -47,7 +49,7 @@ function lambda(aws::SymbolDict, verb; path="", query="")
         service  = "lambda",
         url      = aws_endpoint("lambda", aws[:region]) * resource,
         content  = query == "" ? "" : json(query),
-        headers  = Dict(),
+        headers,
         resource,
         verb,
         aws...
@@ -86,9 +88,9 @@ lambda_exists(aws, name) = lambda_configuration(aws, name) != nothing
 function create_lambda(aws, name, S3Key;
                        S3Bucket=aws[:lambda_bucket],
                        Handler="$name.main",
-                       Role=role_arn(aws, "lambda_s3_exec_role"),
+                       Role=create_lambda_role(aws, name),
                        Runtime="python2.7",
-                       Timeout=30,
+                       Timeout=60,
                        args...)
 
    query = @SymDict(FunctionName = name,
@@ -135,11 +137,16 @@ function Base.show(io::IO, e::AWSLambdaException)
 end
 
 
-function invoke_lambda(aws, name, args)
+function invoke_lambda(aws, name, args; async=false)
+
 
     @protected try
 
-        r = lambda(aws, "POST", path="$name/invocations", query=args)
+        r = lambda(aws, "POST",
+                        path="$name/invocations",
+                        headers=Dict("X-Amz-Invocation-Type" =>
+                                     async ? "Event" : "RequestResponse"),
+                        query=args)
 
         if isa(r, Dict) && haskey(r, :errorMessage)
             throw(AWSLambdaException(string(name), r[:errorMessage]))
@@ -161,6 +168,58 @@ end
 
 invoke_lambda(aws, name; args...) = invoke_lambda(aws, name, SymbolDict(args))
 
+
+async_lambda(aws, name, args) = invoke_lambda(aws, name, args; async=true)
+
+
+function create_lambda_role(aws, name, policy="")
+
+    name = "$(name)_lambda_role"
+
+    @protected try
+
+        r = AWSIAM.iam(aws, Action = "CreateRole",
+                        Path = "/",
+                        RoleName = name,
+                        AssumeRolePolicyDocument = """{
+                            "Version": "2012-10-17",
+                            "Statement": [ {
+                                "Effect": "Allow",
+                                "Principal": {
+                                    "Service": "lambda.amazonaws.com"
+                                },
+                                "Action": "sts:AssumeRole"
+                            } ]
+                        }""")
+
+    catch e
+        @ignore if e.code == "EntityAlreadyExists" end
+    end
+
+    if policy == ""
+        policy = """{
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "logs:CreateLogGroup",
+                        "logs:CreateLogStream",
+                        "logs:PutLogEvents"
+                    ],
+                    "Resource": "arn:aws:logs:*:*:*"
+                }
+            ]
+        }"""
+    end
+
+    AWSIAM.iam(aws, Action = "PutRolePolicy",
+                    RoleName = name,
+                    PolicyName = name,
+                    PolicyDocument = policy)
+
+    return role_arn(aws, name)
+end
 
 
 #-------------------------------------------------------------------------------
@@ -189,29 +248,29 @@ end
 # S3 ZIP File Patching.
 #-------------------------------------------------------------------------------
 
-# Add "files" to .ZIP stored under "key" in "aws[:lambda_bucket]".
+# Add "files" to .ZIP stored under "from_key" in "aws[:lambda_bucket]".
+# Store result under "to_key".
 # Implemented using Python zipfile library running on AWS Lambda
 # (to avoid downloading/uploading .ZIP to/from local machine).
 
-function update_lambda_zip(aws, key, files::Associative)
+function create_lambda_zip(aws, to_key, from_key, files::Associative)
 
-    lambda_name = "ocaws_update_lambda_zip"
+    lambda_name = "ocaws_create_lambda_zip"
 
 #    delete_lambda(aws, lambda_name)
 
     files = [n => base64encode(v) for (n,v) in files]
 
-#    println("update_lambda_zip($key, $(keys(files)))")
-
     @repeat 2 try
 
         # Call lambda function to update ZIP stored in S3...
         bucket = aws[:lambda_bucket]
-        invoke_lambda(aws, lambda_name, @SymDict(bucket, key, files))
+        invoke_lambda(aws, lambda_name,
+                      @SymDict(bucket, to_key, from_key, files))
 
     catch e
 
-        # Deploy update_zip lambda function if needed...
+        # Deploy create_lambda_zip lambda function if needed...
         @retry if e.code == "404"
 
             create_py_lambda(aws, lambda_name,
@@ -229,7 +288,7 @@ function update_lambda_zip(aws, key, files::Associative)
                 bucket = boto3.resource('s3', region_name = region).Bucket(bucket)
 
                 # Download zip file...
-                bucket.download_file(event['key'], '/tmp/lambda.zip')
+                bucket.download_file(event['from_key'], '/tmp/lambda.zip')
 
                 # Patch zip file...
                 with zipfile.ZipFile('/tmp/lambda.zip', 'a') as z:
@@ -239,8 +298,69 @@ function update_lambda_zip(aws, key, files::Associative)
                         info.external_attr = 0777 << 16L
                         z.writestr(info, event['files'][file].decode('base64'))
 
-                # Re-upload zip file...
-                bucket.upload_file('/tmp/lambda.zip', event['key'])
+                # Upload updated zip file...
+                bucket.upload_file('/tmp/lambda.zip', event['to_key'])
+            """)
+        end
+    end
+end
+
+
+function merge_lambda_zip(aws, to_key, from_key, new_keys)
+
+    lambda_name = "ocaws_merge_lambda_zip"
+
+#    delete_lambda(aws, lambda_name)
+
+    @repeat 2 try
+
+        # Call lambda function to update ZIP stored in S3...
+        bucket = aws[:lambda_bucket]
+        invoke_lambda(aws, lambda_name,
+                           @SymDict(bucket, to_key, from_key, new_keys))
+
+    catch e
+
+        # Deploy merge_lambda_zip lambda function if needed...
+        @retry if e.code == "404"
+
+            create_py_lambda(aws, lambda_name,
+            """
+            import os
+            import tempfile
+            import zipfile
+            import shutil
+            import subprocess
+            import boto3
+            import botocore
+
+            def main(event, context):
+
+                # Create temporary working directory...
+                tmpdir = tempfile.mkdtemp()
+                os.chdir(tmpdir)
+
+                # Get bucket object...
+                bucket = event['bucket']
+                region = boto3.client('s3').get_bucket_location(Bucket=bucket)
+                region = region['LocationConstraint']
+                bucket = boto3.resource('s3', region_name = region).Bucket(bucket)
+
+                # Download base zip file...
+                bucket.download_file(event['from_key'], 'base.zip')
+
+                # Download new zip file and merge into base zip file...
+                with zipfile.ZipFile('base.zip', 'a') as za:
+                    for key in event['new_keys']:
+                        bucket.download_file(key, 'new.zip')
+                        with zipfile.ZipFile('new.zip', 'r') as zb:
+                            for i in zb.infolist():
+                                za.writestr(i, zb.open(i.filename).read())
+
+                # Upload new zip file...
+                bucket.upload_file('base.zip', event['to_key'])
+                os.chdir("..")
+                shutil.rmtree(tmpdir)
             """)
         end
     end
@@ -297,10 +417,6 @@ function find_module_files(modules)
             end
         end
     end
-    if !isempty(missing)
-        throw(AWSLambdaException("find_module_files",
-                                 "Can't find: $(join(keys(missing), " "))"))
-    end
 
     # Trim common path from load_path...
     common = commondir(load_path)
@@ -314,6 +430,23 @@ function find_module_files(modules)
         end
     end
 
+    # Look in Pkg directories for modules not in LOAD_PATH...
+    for m in keys(missing)
+        push!(load_path, m)
+        d = joinpath(Pkg.dir(m), "src")
+        cd(d) do
+            for f in glob("*.jl")
+                files[joinpath(m, f)] = readall(joinpath(d, f))
+            end
+        end
+        delete!(missing, m)
+    end
+
+    if !isempty(missing)
+        throw(AWSLambdaException("find_module_files",
+                                 "Can't find: $(join(keys(missing), " "))"))
+    end
+
     return load_path, files
 end
 
@@ -323,7 +456,8 @@ end
 # "jl_code" is added to the .ZIP as "$name.jl".
 # A Python wrapper ("$name.py") is passes the .jl file to bin/julia.
 
-function create_jl_lambda(aws, name, jl_code, modules=[])
+function create_jl_lambda(aws, name, jl_code,
+                          modules=[], options=SymDict())
 
     # Collect files for extra modules...
     modules = filter(m -> !(m in aws[:lambda_packages]), modules)
@@ -341,6 +475,25 @@ function create_jl_lambda(aws, name, jl_code, modules=[])
     import subprocess
     import os
     import json
+    import threading
+    import Queue
+
+    class OutputThread(threading.Thread):
+        def __init__(self, fd):
+            threading.Thread.__init__(self)
+            self._fd = fd
+            self._q = Queue.Queue()
+            self.start()
+
+
+        def run(self):
+            for line in iter(self._fd.readline, ''):
+                self._q.put(line)
+            self._fd.close()
+            self._q.put('')
+
+        def get(self):
+            return self._q.get()
 
     def main(event, context):
 
@@ -361,12 +514,21 @@ function create_jl_lambda(aws, name, jl_code, modules=[])
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT)
 
-        # Pass JSON event data on stdin...
-        out, err = proc.communicate(json.dumps(event))
-        print(out)
+        # Set up thread to read stdout...
+        t = OutputThread(proc.stdout)
+
+        # Write to stdin...
+        proc.stdin.write(json.dumps(event))
+        proc.stdin.close()
+
+        # Read stdout from queue...
+        out = ''
+        for line in iter(t.get, ''):
+            print(line, end='')
+            out += line
 
         # Check exit status...
-        if proc.poll() != 0:
+        if proc.wait() != 0:
             raise Exception(out)
 
         # Return content of output file...
@@ -380,13 +542,18 @@ function create_jl_lambda(aws, name, jl_code, modules=[])
 
 
     # Add python wrapper and julia code to .ZIP file...
+    zipfile = get(options, :zipfile, UInt8[])
+    delete!(options, :zipfile)
     merge!(jl_files, OrderedDict("$name.py" => lambda_py_wrapper,
                                  "$name.jl" => jl_code))
+    open_zip(zipfile) do z
+        merge!(z, jl_files)
+    end
 
-    new_code_hash = hexdigest("sha256", serialize64(jl_files))
+    new_code_hash = hexdigest("sha256", serialize64(Dict(open_zip(zipfile))))
     old_code_hash = jl_lambda_hash(aws, name)
 
-    # Don't create a new lambda one already exists with same code...
+    # Don't create a new lambda if one already exists with same code...
     if new_code_hash == old_code_hash
         return
     end
@@ -396,16 +563,22 @@ function create_jl_lambda(aws, name, jl_code, modules=[])
         delete_lambda(aws, name)
     end
 
-    # Make a copy of base Julia system .ZIP file...
-    zip_file= "jl_lambda_$(name)_$(new_code_hash).zip"
-    s3_copy(aws, aws[:lambda_bucket], "jl_lambda_base.zip", to_path=zip_file)
+    # Add new files to base Julia system .ZIP file...
+    base_file=get(aws, :lambda_base, "jl_lambda_base.zip")
+    lambda_id="jl_lambda_$(name)_$(new_code_hash)"
+    s3_put(aws, aws[:lambda_bucket], "$lambda_id.new.zip", zipfile)
+    merge_lambda_zip(aws, "$lambda_id.zip", base_file, ["$lambda_id.new.zip"])
 
-    # Add new files to .ZIP...
-    update_lambda_zip(aws, zip_file, jl_files)
+    options = @SymDict(MemorySize=1024,
+                       Description=new_code_hash,
+                       options...)
 
     # Deploy the lambda to AWS...
-    r = create_lambda(aws, name, zip_file, MemorySize=1024,
-                                           Description=new_code_hash)
+    r = create_lambda(aws, name, "$lambda_id.zip"; options...)
+
+    if !get(aws, :lambda_precompile, true)
+        return
+    end
 
     # Download .ji cache from the lambda sandbox.
     r = invoke_lambda(aws, name, jl_precompile = true)
@@ -418,12 +591,11 @@ function create_jl_lambda(aws, name, jl_code, modules=[])
     # Delete lambda...
     delete_lambda(aws, name)
 
-    # Add .jl files to .ZIP...
-    update_lambda_zip(aws, zip_file, ji_cache)
+    # Add .ji cache files to .ZIP...
+    create_lambda_zip(aws, "$lambda_id.ji.zip", "$lambda_id.zip", ji_cache)
 
     # Re-deploy the lambda to AWS with precompile cache...
-    create_lambda(aws, name, zip_file, MemorySize=1024,
-                                       Description=new_code_hash)
+    create_lambda(aws, name, "$lambda_id.ji.zip"; options...)
 end
 
 
@@ -478,9 +650,21 @@ end
 # @lambda deploys an AWS Lambda that contains the body of the Julia function.
 # It then rewrites the local Julia function to call invocke_lambda().
 
-macro lambda(aws::Symbol, f::Expr)
+macro lambda(args...)
 
-    @assert f.head == :function
+    usage = "usage: @lambda aws [options::SymDict] function..."
+
+    @assert length(args) <= 3 usage * "A"
+
+    aws = args[1]
+    #@assert isa(aws, Symbol) usage * "B"
+
+    f = args[end]
+    @assert isa(f, Expr) usage * "C"
+    @assert f.head == :function usage * "D"
+
+    options = length(args) > 2 ? esc(args[2]) : :(Dict())
+
     call, body = f.args
     name = call.args[1]
     args = call.args[2:end]
@@ -537,22 +721,23 @@ macro lambda(aws::Symbol, f::Expr)
     """
 
     # Add "aws" dict as first arg...
-    insert!(f.args[1].args, 2, aws)
+    insert!(f.args[1].args, 2, :aws)
 
     # Replace function body with Lambda invocation...
-    f.args[2] = :(invoke_jl_lambda($aws, $name, $(args...)))
+    f.args[2] = :(invoke_jl_lambda(aws, $name, $(args...)))
 
     modules = [string(m.args[1]) for m in modules.args]
 
     quote
-        create_jl_lambda($(esc(aws)), $(string(name)), $jl_code, $modules)
+        create_jl_lambda($(esc(aws)),
+                         $(string(name)), $jl_code, $modules, $options)
         $(esc(f))
         $(Expr(:tuple, args...)) -> $(esc(name))($(esc(aws)), $(args...))
     end
 end
 
-macro λ(aws::Symbol, f::Expr)
-    esc(:(@lambda $aws $f))
+macro λ(args...)
+    esc(:(@lambda $(args...)))
 end
 
 
