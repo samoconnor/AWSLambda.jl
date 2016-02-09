@@ -654,14 +654,13 @@ macro lambda(args...)
 
     usage = "usage: @lambda aws [options::SymDict] function..."
 
-    @assert length(args) <= 3 usage * "A"
+    @assert length(args) <= 3 usage
 
     aws = args[1]
-    #@assert isa(aws, Symbol) usage * "B"
 
     f = args[end]
-    @assert isa(f, Expr) usage * "C"
-    @assert f.head == :function usage * "D"
+    @assert isa(f, Expr) usage
+    @assert f.head == :function usage
 
     options = length(args) > 2 ? esc(args[2]) : :(Dict())
 
@@ -1000,6 +999,259 @@ function apigateway_create(aws, name, args)
            "StatementId" => "apigateway_$(id)_GET"))
 end
 
+
+
+
+# FIXME experimental background julia process hack (to reduce startup time)
+
+function create_jl_lambda_ex(aws, name, jl_code,
+                          modules=[], options=SymDict())
+
+    # Collect files for extra modules...
+    modules = filter(m -> !(m in aws[:lambda_packages]), modules)
+    if modules != []
+        load_path, jl_files = find_module_files(modules)
+    else
+        load_path, jl_files = ("", OrderedDict())
+    end
+    load_path = "[$(join(["'$d'" for d in load_path], ","))]"
+
+    # Wrapper to set up Julia environemnt and run "jl_code"...
+    const lambda_py_wrapper =
+    """
+    from __future__ import print_function
+    import subprocess
+    import os
+    import json
+    import threading
+    import Queue
+
+    class OutputThread(threading.Thread):
+        def __init__(self, fd):
+            threading.Thread.__init__(self)
+            self._fd = fd
+            self._q = Queue.Queue()
+            self.start()
+
+
+        def run(self):
+            for line in iter(self._fd.readline, ''):
+                self._q.put(line)
+            self._fd.close()
+            self._q.put('')
+
+        def get(self):
+            return self._q.get()
+
+        def empty(self):
+            return self._q.empty()
+
+    # Set Julia package directory...
+    root = os.environ['LAMBDA_TASK_ROOT']
+    os.environ['HOME'] = '/tmp/'
+    os.environ['JULIA_PKGDIR'] = root + '/julia'
+    load_path = ':'.join([root + '/' + d for d in $load_path])
+    os.environ['JULIA_LOAD_PATH'] = load_path
+
+    print("Staring julia...")
+    # Start julia process...
+    proc = subprocess.Popen([root + '/bin/julia', root + "/$name.jl"],
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT)
+
+    # Set up thread to read stdout...
+    t = OutputThread(proc.stdout)
+
+
+    def main(event, context):
+        print("py main...")
+
+        # Clean up old return value file...
+        if os.path.isfile('/tmp/lambda_out'):
+            os.remove('/tmp/lambda_out')
+
+        # Write to stdin...
+        proc.stdin.write(json.dumps(event))
+        proc.stdin.write('\\0')
+
+        # Read stdout from queue...
+        out = ''
+        while not os.path.isfile('/tmp/lambda_out'):
+            if not t.empty():
+                line = t.get()
+                print(line, end='')
+                out += line
+            if proc.poll() != None:
+                raise Exception(out)
+
+        # Return content of output file...
+        with open('/tmp/lambda_out', 'r') as f:
+            return {'jl_data': f.read(),
+                    'stdout': out}
+    """
+
+
+    # Add python wrapper and julia code to .ZIP file...
+    zipfile = get(options, :zipfile, UInt8[])
+    delete!(options, :zipfile)
+    merge!(jl_files, OrderedDict("$name.py" => lambda_py_wrapper,
+                                 "$name.jl" => jl_code))
+    open_zip(zipfile) do z
+        merge!(z, jl_files)
+    end
+
+    new_code_hash = hexdigest("sha256", serialize64(Dict(open_zip(zipfile))))
+    old_code_hash = jl_lambda_hash(aws, name)
+
+    # Don't create a new lambda if one already exists with same code...
+    if new_code_hash == old_code_hash
+        return
+    end
+
+    # Delete old lambda with same name...
+    if old_code_hash != nothing
+        delete_lambda(aws, name)
+    end
+
+    # Add new files to base Julia system .ZIP file...
+    base_file=get(aws, :lambda_base, "jl_lambda_base.zip")
+    lambda_id="jl_lambda_$(name)_$(new_code_hash)"
+    s3_put(aws, aws[:lambda_bucket], "$lambda_id.new.zip", zipfile)
+    merge_lambda_zip(aws, "$lambda_id.zip", base_file, ["$lambda_id.new.zip"])
+
+    options = @SymDict(MemorySize=1024,
+                       Description=new_code_hash,
+                       options...)
+
+    # Deploy the lambda to AWS...
+    r = create_lambda(aws, name, "$lambda_id.zip"; options...)
+
+    if !get(aws, :lambda_precompile, true)
+        return
+    end
+
+    # Download .ji cache from the lambda sandbox.
+    r = invoke_lambda(aws, name, jl_precompile = true)
+    ji_cache = deserialize64(r[:jl_data])
+
+    if isempty(ji_cache)
+        return r
+    end
+
+    # Delete lambda...
+    delete_lambda(aws, name)
+
+    # Add .ji cache files to .ZIP...
+    create_lambda_zip(aws, "$lambda_id.ji.zip", "$lambda_id.zip", ji_cache)
+
+    # Re-deploy the lambda to AWS with precompile cache...
+    create_lambda(aws, name, "$lambda_id.ji.zip"; options...)
+end
+
+
+macro lambda_ex(args...)
+
+    usage = "usage: @lambda aws [options::SymDict] function..."
+
+    @assert length(args) <= 3 usage
+
+    aws = args[1]
+
+    f = args[end]
+    @assert isa(f, Expr) usage
+    @assert f.head == :function usage
+
+    options = length(args) > 2 ? esc(args[2]) : :(Dict())
+
+    call, body = f.args
+    name = call.args[1]
+    args = call.args[2:end]
+
+    # Split "using module" lines out of body...
+    modules = Expr(:block, filter(e->isa(e, Expr) && e.head == :using, body.args)...)
+    body.args = filter(e->!isa(e, Expr) || e.head != :using, body.args)
+
+    # Fix up LineNumberNodes...
+    body = eval(Expr(:quote, body))
+
+    arg_names = [isa(a, Expr) ? a.args[1] : a for a in args]
+    get_args = join(["""get(args,"$a",nothing)""" for a in arg_names], ", ")
+
+    jl_code =
+    """
+        eval(Base, :(is_interactive = true))
+
+        insert!(Base.LOAD_CACHE_PATH, 1, ENV["LAMBDA_TASK_ROOT"])
+        mkpath("/tmp/jl_cache")
+        insert!(Base.LOAD_CACHE_PATH, 1, "/tmp/jl_cache")
+
+        using JSON
+
+        $modules
+
+        function $call
+            $body
+        end
+
+        function main(input)
+            args = JSON.parse(UTF8String(input))
+
+            out = open("/tmp/lambda_out.tmp", "w")
+
+            if haskey(args, "jl_precompile")
+
+                cd("/tmp/jl_cache")
+                b64_out = Base64EncodePipe(out)
+                serialize(b64_out, [f => open(readbytes, f) for f in readdir()])
+                close(b64_out)
+
+            elseif haskey(args, "jl_data")
+
+                args = deserialize(Base64DecodePipe(IOBuffer(args["jl_data"])))
+                b64_out = Base64EncodePipe(out)
+                serialize(b64_out, $name(args...))
+                close(b64_out)
+
+            else
+                JSON.print(out, $name($get_args))
+            end
+
+            close(out)
+            mv("/tmp/lambda_out.tmp", "/tmp/lambda_out")
+            println("done")
+        end
+
+        count = 0
+        buf = UInt8[]
+        while true
+            chunk = readavailable(STDIN)
+            append!(buf, chunk)
+            @assert length(chunk) > 0
+            if chunk[end] == '\0'
+                count += 1
+                println("count: \$count")
+                main(buf)
+                empty!(buf)
+            end
+        end
+    """
+
+    # Add "aws" dict as first arg...
+    insert!(f.args[1].args, 2, :aws)
+
+    # Replace function body with Lambda invocation...
+    f.args[2] = :(invoke_jl_lambda(aws, $name, $(args...)))
+
+    modules = [string(m.args[1]) for m in modules.args]
+
+    quote
+        create_jl_lambda_ex($(esc(aws)),
+                         $(string(name)), $jl_code, $modules, $options)
+        $(esc(f))
+        $(Expr(:tuple, args...)) -> $(esc(name))($(esc(aws)), $(args...))
+    end
+end
 
 
 end # module AWSLambda
