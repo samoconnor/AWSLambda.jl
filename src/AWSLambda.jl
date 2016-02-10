@@ -227,7 +227,8 @@ end
 #-------------------------------------------------------------------------------
 
 
-function create_py_lambda(aws, name, py_code)
+function create_py_lambda(aws, name, py_code;
+                          Role=create_lambda_role(aws, name))
 
     delete_lambda(aws, name)
 
@@ -239,7 +240,7 @@ function create_py_lambda(aws, name, py_code)
     s3_put(aws, aws[:lambda_bucket], zip_filename, zip)
 
     # Create lambda...
-    create_lambda(aws, name, zip_filename)
+    create_lambda(aws, name, zip_filename,Role=Role)
 end
 
 
@@ -255,6 +256,7 @@ end
 
 function create_lambda_zip(aws, to_key, from_key, files::Associative)
 
+    bucket = aws[:lambda_bucket]
     lambda_name = "ocaws_create_lambda_zip"
 
 #    delete_lambda(aws, lambda_name)
@@ -264,7 +266,6 @@ function create_lambda_zip(aws, to_key, from_key, files::Associative)
     @repeat 2 try
 
         # Call lambda function to update ZIP stored in S3...
-        bucket = aws[:lambda_bucket]
         invoke_lambda(aws, lambda_name,
                       @SymDict(bucket, to_key, from_key, files))
 
@@ -300,7 +301,30 @@ function create_lambda_zip(aws, to_key, from_key, files::Associative)
 
                 # Upload updated zip file...
                 bucket.upload_file('/tmp/lambda.zip', event['to_key'])
-            """)
+            """;
+            Role = create_lambda_role(aws, lambda_name, """{
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": [
+                            "s3:GetObject",
+                            "s3:PutObject",
+                            "s3:GetBucketLocation"
+                        ],
+                        "Resource": "arn:aws:s3:::$bucket*"
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": [
+                            "logs:CreateLogGroup",
+                            "logs:CreateLogStream",
+                            "logs:PutLogEvents"
+                        ],
+                        "Resource": "arn:aws:logs:*:*:*"
+                    }
+                ]
+            }"""))
         end
     end
 end
@@ -309,13 +333,12 @@ end
 function merge_lambda_zip(aws, to_key, from_key, new_keys)
 
     lambda_name = "ocaws_merge_lambda_zip"
-
+    bucket = aws[:lambda_bucket]
 #    delete_lambda(aws, lambda_name)
 
     @repeat 2 try
 
         # Call lambda function to update ZIP stored in S3...
-        bucket = aws[:lambda_bucket]
         invoke_lambda(aws, lambda_name,
                            @SymDict(bucket, to_key, from_key, new_keys))
 
@@ -361,7 +384,30 @@ function merge_lambda_zip(aws, to_key, from_key, new_keys)
                 bucket.upload_file('base.zip', event['to_key'])
                 os.chdir("..")
                 shutil.rmtree(tmpdir)
-            """)
+            """,
+            Role = create_lambda_role(aws, lambda_name, """{
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Effect": "Allow",
+                        "Action": [
+                            "s3:GetObject",
+                            "s3:PutObject",
+                            "s3:GetBucketLocation"
+                        ],
+                        "Resource": "arn:aws:s3:::$bucket*"
+                    },
+                    {
+                        "Effect": "Allow",
+                        "Action": [
+                            "logs:CreateLogGroup",
+                            "logs:CreateLogStream",
+                            "logs:PutLogEvents"
+                        ],
+                        "Resource": "arn:aws:logs:*:*:*"
+                    }
+                ]
+            }"""))
         end
     end
 end
@@ -1061,7 +1107,7 @@ function create_jl_lambda_ex(aws, name, jl_code,
                             stderr=subprocess.STDOUT)
 
     # Set up thread to read stdout...
-    t = OutputThread(proc.stdout)
+    outpipe = OutputThread(proc.stdout)
 
 
     def main(event, context):
@@ -1077,13 +1123,16 @@ function create_jl_lambda_ex(aws, name, jl_code,
 
         # Read stdout from queue...
         out = ''
-        while not os.path.isfile('/tmp/lambda_out'):
-            if not t.empty():
-                line = t.get()
-                print(line, end='')
-                out += line
-            if proc.poll() != None:
-                raise Exception(out)
+        line = ''
+        while (not outpipe.empty() or line != '\\n' or
+               (proc.poll() is None and not os.path.isfile('/tmp/lambda_out'))):
+            line = outpipe.get()
+            print(line, end='')
+            out += line
+
+        # Check exit status...
+        if proc.poll() != None:
+            raise Exception(out)
 
         # Return content of output file...
         with open('/tmp/lambda_out', 'r') as f:
@@ -1219,7 +1268,7 @@ macro lambda_ex(args...)
 
             close(out)
             mv("/tmp/lambda_out.tmp", "/tmp/lambda_out")
-            println("done")
+            println("")
         end
 
         count = 0
