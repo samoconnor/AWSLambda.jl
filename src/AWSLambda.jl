@@ -240,7 +240,7 @@ function create_py_lambda(aws, name, py_code;
     s3_put(aws, aws[:lambda_bucket], zip_filename, zip)
 
     # Create lambda...
-    create_lambda(aws, name, zip_filename,Role=Role)
+    create_lambda(aws, name, zip_filename, Role=Role, MemorySize=1024)
 end
 
 
@@ -530,17 +530,21 @@ function create_jl_lambda(aws, name, jl_code,
     load_path = ':'.join([root + '/' + d for d in $load_path])
     os.environ['JULIA_LOAD_PATH'] = load_path
 
+    julia_proc = None
+
     # Start Julia interpreter ...
-    proc = subprocess.Popen([root + '/bin/julia', root + "/$name.jl"],
-                            stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT)
+    def start_julia():
+        global julia_proc
+        julia_proc = subprocess.Popen([root + '/bin/julia', root + "/$name.jl"],
+                                      stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT)
 
     # Pass args to Julia as JSON with null,newline terminator...
     def julia_eval(args):
-        json.dump(args, proc.stdin)
-        proc.stdin.write('\\0\\n')
-        proc.stdin.flush()
+        json.dump(args, julia_proc.stdin)
+        julia_proc.stdin.write('\\0\\n')
+        julia_proc.stdin.flush()
 
     def main(event, context):
 
@@ -548,19 +552,22 @@ function create_jl_lambda(aws, name, jl_code,
         if os.path.isfile('/tmp/lambda_out'):
             os.remove('/tmp/lambda_out')
 
+        if julia_proc is None or julia_proc.poll() is not None:
+            start_julia()
+
         # Pass "event" to Julia...
         threading.Thread(target=julia_eval, args=(event,)).start()
 
         # Wait for output...
         out = ''
-        for line in iter(proc.stdout.readline, ''):
+        for line in iter(julia_proc.stdout.readline, ''):
             if line == '\\0\\n':
                 break
             print(line, end='')
             out += line
 
         # Check exit status...
-        if proc.poll() != None:
+        if julia_proc.poll() != None:
             raise Exception(out)
 
         # Return content of output file...
