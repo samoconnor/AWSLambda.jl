@@ -708,6 +708,11 @@ macro lambda(args...)
 
     # Split "using module" lines out of body...
     modules = Expr(:block, filter(e->isa(e, Expr) && e.head == :using, body.args)...)
+    for m in [:AWSCore, :AWSEC2, :AWSIAM, :AWSLambda, :AWSS3, :AWSSNS, :AWSSQS,
+              :Retry, :SymDict, :XMLDict, :Glob, :InfoZIP]
+        push!(modules.args, Expr(:using, m))
+    end
+
     body.args = filter(e->!isa(e, Expr) || e.head != :using, body.args)
 
     # Fix up LineNumberNodes...
