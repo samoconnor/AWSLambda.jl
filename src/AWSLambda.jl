@@ -112,6 +112,20 @@ function update_lambda(aws, name, S3Bucket, S3Key)
 end
 
 
+function lambda_create_alias(aws, name, alias; FunctionVersion="\$LATEST")
+
+    lambda(aws, "POST", path="$name/aliases",
+                        query=@SymDict(FunctionVersion, Name=alias))
+end
+
+
+function lambda_update_alias(aws, name, alias; FunctionVersion="\$LATEST")
+
+    lambda(aws, "PUT", path="$name/aliases/$alias",
+                       query=@SymDict(FunctionVersion))
+end
+
+
 function delete_lambda(aws, name)
 
     @protected try
@@ -465,8 +479,10 @@ function find_module_files(modules)
     end
 
     # Trim common path from load_path...
-    common = commondir(load_path)
-    load_path = [f[length(common)+1:end] for f in load_path]
+    if !isempty(load_path)
+        common = commondir(load_path)
+        load_path = [f[length(common)+1:end] for f in load_path]
+    end
 
     # Collect ".jl" files in module directories...
     files = OrderedDict()
@@ -513,6 +529,8 @@ function create_jl_lambda(aws, name, jl_code,
         load_path, jl_files = ("", OrderedDict())
     end
     load_path = "[$(join(["'$d'" for d in load_path], ","))]"
+
+    error_sns_arn = get(options, :error_sns_arn, "")
 
     # Wrapper to set up Julia environemnt and run "jl_code"...
     const lambda_py_wrapper =
@@ -568,6 +586,14 @@ function create_jl_lambda(aws, name, jl_code,
 
         # Check exit status...
         if julia_proc.poll() != None:
+            if '$error_sns_arn' != '':
+                subject = 'Lambda Error: $name '
+                subject += json.dumps(event, separators=(',',':'))
+                error = '$name\\n' + json.dumps(event) + '\\n\\n' + out
+                import boto3
+                boto3.client('sns').publish(TopicArn='$error_sns_arn',
+                                            Message=error,
+                                            Subject=subject[:100])
             raise Exception(out)
 
         # Return content of output file...
