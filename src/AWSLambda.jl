@@ -9,9 +9,11 @@
 #==============================================================================#
 
 
+__precompile__()
+
+
 module AWSLambda
 
-__precompile__()
 
 export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        async_lambda, create_jl_lambda, invoke_jl_lambda, create_lambda_role,
