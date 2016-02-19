@@ -25,6 +25,7 @@ export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
 
 using AWSCore
 using AWSS3
+using AWSEC2
 using AWSIAM
 using JSON
 using InfoZIP
@@ -997,8 +998,16 @@ function create_jl_lambda_base(aws; release = "release-0.4")
         } ]
     }"""
 
+    # http://docs.aws.amazon.com/lambda/latest/dg/current-supported-versions.html
+    ami = ec2(aws, @SymDict(
+            Action = "DescribeImages",
+            "Filter.1.Name" = "owner-alias",
+            "Filter.1.Value" = "amazon",
+            "Filter.2.Name" = "name",
+            "Filter.2.Value" = "amzn-ami-hvm-2015.09.1.x86_64-gp2"))
+
     create_ec2(aws, "ocaws_jl_lambda_build_server",
-                    ImageId      = "ami-1ecae776",
+                    ImageId      = ami["imagesSet"]["item"]["imageId"],
                     InstanceType = "c3.large",
                     KeyName      = "ssh-ec2",
                     UserData     = server_config,
