@@ -93,7 +93,7 @@ function create_lambda(aws, name, S3Key;
                        Handler="$name.main",
                        Role=create_lambda_role(aws, name),
                        Runtime="python2.7",
-                       Timeout=60,
+                       Timeout=300,
                        args...)
 
    query = @SymDict(FunctionName = name,
@@ -104,14 +104,29 @@ function create_lambda(aws, name, S3Key;
                     Timeout,
                     args...)
 
-    lambda(aws, "POST", query=query)
+    @repeat 5 try
+
+        lambda(aws, "POST", query=query)
+
+    catch e
+        # Retry in case Role was just created and is not yet active...
+        @delay_retry if e.code == "400" end
+    end
 end
 
 
-function update_lambda(aws, name, S3Bucket, S3Key)
+function update_lambda(aws, name, S3Key;
+                       S3Bucket=aws[:lambda_bucket], args...)
 
-    lambda(aws, "PUT", path="$name/code",
-                       query=@SymDict(S3Key, S3Bucket))
+    @sync begin
+
+        @async lambda(aws, "PUT", path="$name/code",
+                      query=@SymDict(S3Key, S3Bucket))
+
+        @async if !isempty(args)
+            lambda(aws, "PUT", path="$name/configuration", query=@SymDict(args...))
+        end
+    end
 end
 
 
@@ -291,6 +306,8 @@ function create_lambda_zip(aws, to_key, from_key, files::Associative)
         # Deploy create_lambda_zip lambda function if needed...
         @retry if e.code == "404"
 
+            role_name = string(lambda_name, '-', aws[:region])
+
             create_py_lambda(aws, lambda_name,
             """
             import boto3
@@ -319,7 +336,7 @@ function create_lambda_zip(aws, to_key, from_key, files::Associative)
                 # Upload updated zip file...
                 bucket.upload_file('/tmp/lambda.zip', event['to_key'])
             """;
-            Role = create_lambda_role(aws, lambda_name, """{
+            Role = create_lambda_role(aws, role_name, """{
                 "Version": "2012-10-17",
                 "Statement": [
                     {
@@ -364,6 +381,8 @@ function merge_lambda_zip(aws, to_key, from_key, new_keys)
         # Deploy merge_lambda_zip lambda function if needed...
         @retry if e.code == "404"
 
+            role_name = string(lambda_name, '-', aws[:region])
+
             create_py_lambda(aws, lambda_name,
             """
             import os
@@ -402,7 +421,7 @@ function merge_lambda_zip(aws, to_key, from_key, new_keys)
                 os.chdir("..")
                 shutil.rmtree(tmpdir)
             """,
-            Role = create_lambda_role(aws, lambda_name, """{
+            Role = create_lambda_role(aws, role_name, """{
                 "Version": "2012-10-17",
                 "Statement": [
                     {
@@ -434,14 +453,6 @@ end
 #-------------------------------------------------------------------------------
 # Julia Code Support.
 #-------------------------------------------------------------------------------
-
-
-# SHA256 Hash of deployed Julia code is stored in the Description field.
-
-function jl_lambda_hash(aws, name)
-
-    get(lambda_configuration(aws, name), :Description, nothing)
-end
 
 
 function commondir(dirs::Array)
@@ -499,10 +510,9 @@ function find_module_files(modules)
     for m in keys(missing)
         push!(load_path, m)
         d = joinpath(Pkg.dir(m), "src")
-        cd(d) do
-            for f in glob("*.jl")
-                files[joinpath(m, f)] = readall(joinpath(d, f))
-            end
+        for f in glob("*.jl", d)
+            f = f[length(d)+2:end]
+            files[joinpath(m, f)] = readall(joinpath(d, f))
         end
         delete!(missing, m)
     end
@@ -617,17 +627,14 @@ function create_jl_lambda(aws, name, jl_code,
         merge!(z, jl_files)
     end
 
+    # SHA256 Hash of deployed Julia code is stored in the Description field.
+    old_config = lambda_configuration(aws, name)
     new_code_hash = hexdigest("sha256", serialize64(Dict(open_zip(zipfile))))
-    old_code_hash = jl_lambda_hash(aws, name)
+    old_code_hash = get(old_config, :Description, nothing)
 
     # Don't create a new lambda if one already exists with same code...
     if new_code_hash == old_code_hash
         return
-    end
-
-    # Delete old lambda with same name...
-    if old_code_hash != nothing
-        delete_lambda(aws, name)
     end
 
     # Add new files to base Julia system .ZIP file...
@@ -641,28 +648,33 @@ function create_jl_lambda(aws, name, jl_code,
                        options...)
 
     # Deploy the lambda to AWS...
-    r = create_lambda(aws, name, "$lambda_id.zip"; options...)
-
-    if !get(aws, :lambda_precompile, true)
-        return
+    if old_config == nothing
+        r = create_lambda(aws, name, "$lambda_id.zip"; options...)
+    else
+        r = update_lambda(aws, name, "$lambda_id.zip"; options...)
     end
 
-    # Download .ji cache from the lambda sandbox.
-    r = invoke_lambda(aws, name, jl_precompile = true)
-    ji_cache = deserialize64(r[:jl_data])
+    if get(aws, :lambda_precompile, true)
 
-    if isempty(ji_cache)
-        return r
+        # Download .ji cache from the lambda sandbox.
+        r = invoke_lambda(aws, name, jl_precompile = true)
+        ji_cache = deserialize64(r[:jl_data])
+
+        if !isempty(ji_cache)
+
+            # Add .ji cache files to .ZIP...
+            create_lambda_zip(aws, "$lambda_id.ji.zip",
+                              "$lambda_id.zip", ji_cache)
+
+            # Update lambda using new .ZIP...
+            update_lambda(aws, name, "$lambda_id.ji.zip")
+        end
     end
 
-    # Delete lambda...
-    delete_lambda(aws, name)
-
-    # Add .ji cache files to .ZIP...
-    create_lambda_zip(aws, "$lambda_id.ji.zip", "$lambda_id.zip", ji_cache)
-
-    # Re-deploy the lambda to AWS with precompile cache...
-    create_lambda(aws, name, "$lambda_id.ji.zip"; options...)
+    # Clean up S3 files...
+    @sync for z in [".new.zip", ".zip", ".ji.zip"]
+        @async s3_delete(aws, aws[:lambda_bucket], "$lambda_id$z")
+    end
 end
 
 
@@ -935,10 +947,9 @@ function create_jl_lambda_base(aws; release = "release-0.4")
         fi
 
         # Precompile Julia modules...
-        /var/task/bin/julia -e '
-            Pkg.init()
-            $(join(["Pkg.add(\"$p\")\nusing $p\n" for p in pkg_list]))
-        '
+        /var/task/bin/julia -e 'Pkg.init()'
+        $(join(["/var/task/bin/julia -e 'Pkg.add(\"$p\")'\n" for p in pkg_list]))
+        $(join(["/var/task/bin/julia -e 'using $p'\n" for p in pkg_list]))
 
         # Copy minimal set of files to /task-staging...
         mkdir -p /task-staging/bin
