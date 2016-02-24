@@ -20,6 +20,8 @@ export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        @λ, @lambda, amap, serialize64, deserialize64,
        lambda_compilecache,
        create_jl_lambda_base, merge_lambda_zip,
+       lambda_configuration,
+       lambda_create_alias, lambda_update_alias, lambda_publish_version,
        apigateway, apigateway_restapis, apigateway_create,
        @lambda_eval, @lambda_call
 
@@ -126,6 +128,19 @@ function update_lambda(aws, name, S3Key;
 
         @async if !isempty(args)
             lambda(aws, "PUT", path="$name/configuration", query=@SymDict(args...))
+        end
+    end
+end
+
+
+function lambda_publish_version(aws, name, alias)
+
+    r = lambda(aws, "POST", path="$name/versions")
+    @protected try
+        lambda_create_alias(aws, name, alias, FunctionVersion=r[:Version])
+    catch e
+        @ignore if e.code == "409"
+            lambda_update_alias(aws, name, alias, FunctionVersion=r[:Version])
         end
     end
 end
