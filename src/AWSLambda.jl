@@ -20,7 +20,8 @@ export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        @λ, @lambda, amap, serialize64, deserialize64,
        lambda_compilecache,
        create_jl_lambda_base, merge_lambda_zip,
-       apigateway, apigateway_restapis, apigateway_create
+       apigateway, apigateway_restapis, apigateway_create,
+       @lambda_eval, @lambda_call
 
 
 using AWSCore
@@ -867,6 +868,33 @@ function amap(f, l)
     end
 
     return results
+end
+
+
+macro lambda_call(aws, func)
+
+    func = Expr(:quote, func)
+
+    esc(quote
+        (args...) -> begin
+            @repeat 2 try
+
+                invoke_jl_lambda($aws, :jl_lambda_call, $func, args)
+
+            catch e
+                @retry if e.code == "404"
+                    @λ $aws function jl_lambda_call(func, args)
+                        eval(func)(args...)
+                    end
+                end
+            end
+        end
+    end)
+end
+
+
+macro lambda_eval(aws, expr)
+    esc(quote @lambda_call($aws,()->$expr)() end)
 end
 
 
