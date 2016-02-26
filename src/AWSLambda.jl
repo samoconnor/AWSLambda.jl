@@ -88,6 +88,12 @@ function lambda_configuration(aws, name)
 end
 
 
+function lambda_update_configuration(aws, name, options)
+
+    lambda(aws, "PUT", path="$name/configuration", query=options)
+end
+
+
 lambda_exists(aws, name) = lambda_configuration(aws, name) != nothing
 
 
@@ -620,9 +626,13 @@ function create_jl_lambda(aws, name, jl_code,
                 subject += json.dumps(event, separators=(',',':'))
                 error = '$name\\n' + json.dumps(event) + '\\n\\n' + out
                 import boto3
-                boto3.client('sns').publish(TopicArn='$error_sns_arn',
-                                            Message=error,
-                                            Subject=subject[:100])
+                try:
+                    boto3.client('sns').publish(TopicArn='$error_sns_arn',
+                                                Message=error,
+                                                Subject=subject[:100])
+                except Exception:
+                    pass
+
             raise Exception(out)
 
         # Return content of output file...
@@ -649,7 +659,7 @@ function create_jl_lambda(aws, name, jl_code,
     old_code_hash = get(old_config, :Description, nothing)
 
     # Don't create a new lambda if one already exists with same code...
-    if new_code_hash == old_code_hash
+    if new_code_hash == old_code_hash && !get(aws, :lambda_force_update, false)
         return
     end
 
@@ -687,9 +697,16 @@ function create_jl_lambda(aws, name, jl_code,
         end
     end
 
-    # Clean up S3 files...
-    @sync for z in [".new.zip", ".zip", ".ji.zip"]
-        @async s3_delete(aws, aws[:lambda_bucket], "$lambda_id$z")
+
+    @sync begin
+
+        # Update config...
+        @async lambda_update_configuration(aws, name, options)
+
+        # Clean up S3 files...
+        for z in [".new.zip", ".zip", ".ji.zip"]
+            @async s3_delete(aws, aws[:lambda_bucket], "$lambda_id$z")
+        end
     end
 end
 
@@ -930,6 +947,10 @@ function create_jl_lambda_base(aws; release = "release-0.4")
         push!(pkg_list, "JSON")
     end
 
+    # FIXME
+    # consider downloading base tarball from here:
+    # https://github.com/samoconnor/AWSLambda.jl/releases/download/v0.0.10/jl_lambda_base.tgz
+
     server_config = [(
 
         "cloud_config.txt", "text/cloud-config",
@@ -992,6 +1013,7 @@ function create_jl_lambda_base(aws; release = "release-0.4")
         # Precompile Julia modules...
         /var/task/bin/julia -e 'Pkg.init()'
         $(join(["/var/task/bin/julia -e 'Pkg.add(\"$p\")'\n" for p in pkg_list]))
+        #/var/task/bin/julia -e 'Pkg.checkout(\"AWSCore\", pull=true)'
         $(join(["/var/task/bin/julia -e 'using $p'\n" for p in pkg_list]))
 
         # Copy minimal set of files to /task-staging...
