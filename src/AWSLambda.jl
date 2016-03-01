@@ -17,7 +17,7 @@ module AWSLambda
 
 export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        async_lambda, create_jl_lambda, invoke_jl_lambda, create_lambda_role,
-       @λ, @lambda, amap, serialize64, deserialize64,
+       @λ, @lambda, serialize64, deserialize64,
        lambda_compilecache,
        create_jl_lambda_base, merge_lambda_zip,
        lambda_configuration,
@@ -476,6 +476,39 @@ end
 # Julia Code Support.
 #-------------------------------------------------------------------------------
 
+#=
+FIXME
+
+function cached_modules()
+    r = []
+    for p in filter(isdir, Base.LOAD_CACHE_PATH)
+        for f in readdir(p)
+            push!(r, symbol(splitext(f)[1]))
+        end
+    end
+    return r
+end
+
+
+function module_files(m, cached)
+    r = Dict()
+    for p in Base.find_all_in_cache_path(m)
+        modules, files = Base.cache_dependencies(p)
+        for (f,t) in files
+            r[f] = nothing
+        end
+        for (m,t) in modules
+            if m in cached
+                continue
+            end
+            for f in module_files(m)
+                r[f] = nothing
+            end
+        end
+    end
+    return keys(r)
+end
+=#
 
 function commondir(dirs::Array)
 
@@ -873,33 +906,6 @@ end
 
 macro λ(args...)
     esc(:(@lambda $(args...)))
-end
-
-
-# Async version of map()
-#
-# e.g. Execute a lambda 100 times in parallel
-#
-#   f = @lambda aws function foo(n) "No. $n" end
-#
-#   amap(f, 1:100)
-
-function amap(f, l)
-
-    count = length(l)
-
-    results = Array{Any,1}(count)
-    fill!(results, nothing)
-
-    @sync begin
-        for (i,v) in enumerate(l)
-            @async begin
-                results[i] = f(v...)
-            end
-        end
-    end
-
-    return results
 end
 
 
