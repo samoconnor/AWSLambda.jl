@@ -816,7 +816,7 @@ macro lambda(args...)
     # Split "using module" lines out of body...
     modules = Expr(:block, filter(e->isa(e, Expr) && e.head == :using, body.args)...)
     for m in [:AWSCore, :AWSEC2, :AWSIAM, :AWSLambda, :AWSS3, :AWSSNS, :AWSSQS,
-              :Retry, :SymDict, :XMLDict, :Glob, :InfoZIP]
+              :AWSSES, :AWSSDB, :Retry, :SymDict, :XMLDict, :Glob, :InfoZIP]
         push!(modules.args, Expr(:using, m))
     end
 
@@ -1020,6 +1020,7 @@ function create_jl_lambda_base(aws; release = "release-0.4")
         /var/task/bin/julia -e 'Pkg.init()'
         $(join(["/var/task/bin/julia -e 'Pkg.add(\"$p\")'\n" for p in pkg_list]))
         #/var/task/bin/julia -e 'Pkg.checkout(\"AWSCore\", pull=true)'
+        #/var/task/bin/julia -e 'Pkg.checkout(\"AWSLambda\", pull=true)'
         $(join(["/var/task/bin/julia -e 'using $p'\n" for p in pkg_list]))
 
         # Copy minimal set of files to /task-staging...
