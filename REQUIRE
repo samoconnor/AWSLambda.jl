@@ -1,5 +1,8 @@
 julia 0.4
 AWSCore
 AWSSQS
+AWSS3
+AWSEC2
+AWSIAM
 InfoZIP
 DataStructures
