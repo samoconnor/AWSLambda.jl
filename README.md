@@ -13,13 +13,14 @@ using AWSLambda
 aws = aws_config(region = "us-east-1")
 ```
 
+_The AWS IAM user requires acess to Lambda, EC2 and AWS._
 
 Set up a bucket to store Lambda .ZIP files...
 
 ```julia
 using AWSS3
 s3_create_bucket(aws, "com.me.jl_lambda")
-aws[:lambda_bucket] = "com.me.jl_lambda")
+aws[:lambda_bucket] = "com.me.jl_lambda"
 ```
 
 
@@ -36,7 +37,8 @@ create_jl_lambda_base(aws)
 _`create_jl_lambda_base` creates a temporary EC2 server to build the Julia runtime.
 The runtime is stored at `aws[:lambda_bucket]/jl_lambda_base.zip`.
 It takes about 1 hour to do a full build the first time.
-After that rebuilds take about 5 minutes._
+After that rebuilds take about 5 minutes.
+An EC2 keypair with the name `ssh-ec2` must be created._
 
 
 Deploy a Lambda function to count prime numbers...
