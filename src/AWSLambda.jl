@@ -842,7 +842,7 @@ macro lambda_call(aws, func)
 
     esc(quote
         (args...) -> begin
-            @repeat 2 try
+            Retry.@repeat 2 try
 
                 invoke_jl_lambda($aws, :jl_lambda_call, $func, args)
 

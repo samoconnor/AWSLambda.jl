@@ -1,11 +1,11 @@
 # AWSLambda
 
-AWS Lambda Interface for Julia
+[AWS Lambda](https://aws.amazon.com/documentation/lambda/) Interface for Julia
 
 [![Build Status](https://travis-ci.org/samoconnor/AWSLambda.jl.svg)](https://travis-ci.org/samoconnor/AWSLambda.jl)
 
 
-Start by creating a basic AWSCore configuration...
+Start by creating a basic [AWSCore configuration](https://github.com/samoconnor/AWSCore.jl#configuration)...
 
 ```julia
 using AWSCore
@@ -38,7 +38,39 @@ _`create_jl_lambda_base` creates a temporary EC2 server to build the Julia runti
 The runtime is stored at `aws[:lambda_bucket]/jl_lambda_base.zip`.
 It takes about 1 hour to do a full build the first time.
 After that rebuilds take about 5 minutes.
-An EC2 keypair with the name `ssh-ec2` must be created._
+An EC2 keypair with the name `ssh-ec2` must be created by hand._
+
+
+Execute a function on Lambda...
+```julia
+@lambda_call(aws, readdir)("/var/task/bin")
+
+1-element Array{ByteString,1}:
+ "julia"
+
+@lambda_call(aws, sum)([1,2,3])
+
+6
+```
+
+
+Evaluate an expression on Lambda...
+```julia
+@lambda_eval aws ENV["LAMBDA_TASK_ROOT"]
+
+"/var/task"
+```
+
+Evaluate an expression on Lambda...
+```julia
+@lambda_eval aws begin
+    l = open(readlines, "/proc/cpuinfo")
+    l = filter(i->ismatch(r"^model name", i), l)
+    strip(split(l[1], ":")[2])
+end
+
+"Intel(R) Xeon(R) CPU E5-2680 v2 @ 2.80GHz"
+```
 
 
 Deploy a Lambda function to count prime numbers...
@@ -68,6 +100,37 @@ end
 
 @test count_primes(10, 10000000000) == 455052507
 ```
+
+Publish a verion with an alias...
+```julia
+lambda_publish_version(aws, "count_primes", "PROD")
+```
+
+
+Call a deployed Lambda by name with named arguments...
+
+```julia
+r = invoke_lambda(aws, "count_primes", low = 10, high = 100)
+@test r[:jl_data] == "21"
+```
+_Arguments and result are transfered as JSON._
+
+
+Call a deployed Lambda and don't wait for the result...
+
+```julia
+r = async_lambda(aws, "count_primes", @SymDict(low = 10, high = 100))
+```
+_Arguments are transfered as JSON._
+
+
+Call a deployed Lambda by name...
+```julia
+r = invoke_jl_lambda(aws, "count_primes", 10 = 100)
+@test r == 21
+```
+_Arguments and result are transfered as serialised Julia objects._
+
 
 Create a local module  `TestModule/TestModule.jl`...
 
