@@ -893,6 +893,8 @@ function precompiled_module_files(aws, modules::Vector{Symbol})
 
     ex = [lambda_module_cache(aws)..., :Main, :Base, :Core]
 
+    modules = collect(filter(m->!(m in ex), modules))
+
     return unique([[_precompiled_module_files(i, ex) for i in modules]...;])
 end
 
@@ -1072,6 +1074,7 @@ function create_jl_lambda_base(aws; release = "release-0.4")
         /var/task/bin/julia -e 'Pkg.init()'
         $(join(["/var/task/bin/julia -e 'Pkg.add(\"$p\")'\n" for p in pkg_list]))
 #        /var/task/bin/julia -e 'Pkg.checkout(\"AWSCore\", pull=true)'
+#        /var/task/bin/julia -e 'Pkg.checkout(\"AWSSDB\", pull=true)'
 #        /var/task/bin/julia -e 'Pkg.checkout(\"AWSLambda\", pull=true)'
         $(join(["/var/task/bin/julia -e 'using $p'\n" for p in pkg_list]))
 
