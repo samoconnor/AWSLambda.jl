@@ -1001,11 +1001,27 @@ end
 
 function create_jl_lambda_base(aws; release = "release-0.4")
 
+    # List of Amazon Linux packages to install...
+    yum_list = ["git",
+                "cmake",
+                "m4",
+                "patch",
+                "gcc",
+                "gcc-c++",
+                "gcc-gfortran",
+                "libgfortran",
+                "openssl-devel"]
+
+    append!(yum_list, get(aws, :lambda_yum_packages, []))
+
+
+    # List of Julia packages to install...
     pkg_list = aws[:lambda_packages]
 
     if !("JSON" in pkg_list)
         push!(pkg_list, "JSON")
     end
+
 
     # FIXME
     # consider downloading base tarball from here:
@@ -1015,17 +1031,7 @@ function create_jl_lambda_base(aws; release = "release-0.4")
 
         "cloud_config.txt", "text/cloud-config",
 
-        """packages:
-         - git
-         - cmake
-         - m4
-         - patch
-         - gcc
-         - gcc-c++
-         - gcc-gfortran
-         - libgfortran
-         - openssl-devel
-        """
+        "packages:\n$(string([" - $p\n" for p in yum_list]...))"
 
     ),(
 
