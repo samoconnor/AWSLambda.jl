@@ -871,6 +871,10 @@ end
 
 function lambda_module_cache(aws)
 
+    if !lambda_exists(aws, "jl_lambda_call")
+        return [symbol(p) for p in aws[:lambda_packages]]
+    end
+
     @lambda_eval aws [symbol(splitext(f)[1]) for f in 
                         [[readdir(p) for p in
                             filter(isdir, Base.LOAD_CACHE_PATH)]...;]]
@@ -972,6 +976,10 @@ function module_files(aws, modules::Vector{Symbol})
                 end
             end
         end
+    end
+
+    if isempty(d)
+        return [], OrderedDict()
     end
 
     # Remove common prefix from load path locations...
