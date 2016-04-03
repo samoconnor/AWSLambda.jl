@@ -1025,6 +1025,7 @@ function create_jl_lambda_base(aws; release = "release-0.4")
 
     # List of Julia packages to install...
     pkg_list = aws[:lambda_packages]
+    pkg_list_clone = aws[:lambda_packages_clone]
 
     if !("JSON" in pkg_list)
         push!(pkg_list, "JSON")
@@ -1087,10 +1088,12 @@ function create_jl_lambda_base(aws; release = "release-0.4")
         # Precompile Julia modules...
         /var/task/bin/julia -e 'Pkg.init()'
         $(join(["/var/task/bin/julia -e 'Pkg.add(\"$p\")'\n" for p in pkg_list]))
+        $(join(["/var/task/bin/julia -e 'Pkg.clone(\"$p\")'\n" for p in pkg_list_clone]))
 #        /var/task/bin/julia -e 'Pkg.checkout(\"AWSCore\", pull=true)'
 #        /var/task/bin/julia -e 'Pkg.checkout(\"AWSSDB\", pull=true)'
 #        /var/task/bin/julia -e 'Pkg.checkout(\"AWSLambda\", pull=true)'
         $(join(["/var/task/bin/julia -e 'using $p'\n" for p in pkg_list]))
+        $(join(["/var/task/bin/julia -e 'using $p'\n" for p in pkg_list_clone]))
 
         # Copy minimal set of files to /task-staging...
         mkdir -p /task-staging/bin
