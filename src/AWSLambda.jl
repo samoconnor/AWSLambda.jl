@@ -697,6 +697,7 @@ end
 clean_ex(ex) = ex
 function clean_ex(ex::Expr)
     args = map(clean_ex, ex.args)
+    if ex.head in [:break, :continue]; return ex.head; end
     if ex.head != :block; return Expr(ex.head, args...); end
 
     args = collect(filter(ex->(!is_linenumber(ex)), args))
