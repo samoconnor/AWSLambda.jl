@@ -23,7 +23,7 @@ export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        lambda_configuration,
        lambda_create_alias, lambda_update_alias, lambda_publish_version,
        apigateway, apigateway_restapis, apigateway_create,
-       @lambda_eval, @lambda_call
+       @lambda_eval, @lambda_call, lambda_include, lambda_include_string
 
 
 using AWSCore
@@ -859,10 +859,31 @@ macro lambda_call(aws, func)
 end
 
 
+function lambda_include_string(aws, code)
+    @lambda_call(aws, include_string)(code)
+end
+
+
+function lambda_include(aws, filename)
+    code = open(readall, filename)
+    @lambda_call(aws, include_string)(code, filename)
+end
+
 
 # Evaluate "expr" in the Lambda sandbox.
 
 macro lambda_eval(aws, expr)
+
+    # Separate "using" statements from expression...
+    usings = Expr(:block, filter(e->isa(e, Expr) && e.head == :using, expr.args)...)
+    expr.args = filter(e->!isa(e, Expr) || e.head != :using, expr.args)
+
+    # Eval "using" statements before rest of expression...
+    expr = quote
+        eval($(Expr(:quote, usings)))
+        eval($(Expr(:quote, expr)))
+    end
+
     esc(quote @lambda_call($aws,()->$expr)() end)
 end
 
