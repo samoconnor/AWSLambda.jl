@@ -526,8 +526,10 @@ function create_jl_lambda(aws, name, jl_code,
                                       stderr=subprocess.STDOUT)
 
     # Pass args to Julia as JSON with null,newline terminator...
-    def julia_eval(args):
-        json.dump(args, julia_proc.stdin)
+    def julia_eval(event, context):
+        json.dump({'event': event, 'context': context.__dict__},
+                  julia_proc.stdin,
+                  default=lambda o: '')
         julia_proc.stdin.write('\\0\\n')
         julia_proc.stdin.flush()
 
@@ -541,7 +543,7 @@ function create_jl_lambda(aws, name, jl_code,
             start_julia()
 
         # Pass "event" to Julia...
-        threading.Thread(target=julia_eval, args=(event,)).start()
+        threading.Thread(target=julia_eval, args=(event, context)).start()
 
         # Calcualte execution time limit...
         time_limit = time.time() + context.get_remaining_time_in_millis()/1000.0
@@ -749,7 +751,7 @@ macro lambda(args...)
     body.args = filter(e->!isa(e, Expr) || e.head != :using, body.args)
 
     arg_names = [isa(a, Expr) ? a.args[1] : a for a in args]
-    get_args = join(["""get(args,"$a",nothing)""" for a in arg_names], ", ")
+    get_args = join(["""get(event,"$a",nothing)""" for a in arg_names], ", ")
 
     body = clean_ex(body)
 
@@ -771,20 +773,22 @@ macro lambda(args...)
         end
 
         # Run lambda function...
-        function main(args)
+        function main(event, context)
+
+            global LAMBDA_CONTEXT = context
 
             out = open("/tmp/lambda_out", "w")
 
-            if haskey(args, "jl_precompile")
+            if haskey(event, "jl_precompile")
 
                 cd("/tmp/jl_cache")
                 b64_out = Base64EncodePipe(out)
                 serialize(b64_out, [f => open(readbytes, f) for f in readdir()])
                 close(b64_out)
 
-            elseif haskey(args, "jl_data")
+            elseif haskey(event, "jl_data")
 
-                args = deserialize(Base64DecodePipe(IOBuffer(args["jl_data"])))
+                args = deserialize(Base64DecodePipe(IOBuffer(event["jl_data"])))
                 b64_out = Base64EncodePipe(out)
                 serialize(b64_out, $name(args...))
                 close(b64_out)
@@ -806,7 +810,8 @@ macro lambda(args...)
 
             # When end of input is found, call main()...
             if length(buf) >  1 && buf[end-1:end] == ['\\0','\\n']
-                main(JSON.parse(UTF8String(buf)))
+                input = JSON.parse(UTF8String(buf))
+                main(input["event"], input["context"])
                 empty!(buf)
             end
         end
