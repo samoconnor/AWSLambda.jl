@@ -43,6 +43,7 @@ import Nettle: hexdigest
 
 # For compatibility with Julia 0.4
 using Compat.readstring
+using Compat.read
 
 
 #-------------------------------------------------------------------------------
@@ -786,7 +787,7 @@ macro lambda(args...)
 
                 cd("/tmp/jl_cache")
                 b64_out = Base64EncodePipe(out)
-                serialize(b64_out, [f => open(readbytes, f) for f in readdir()])
+                serialize(b64_out, [f => read(f) for f in readdir()])
                 close(b64_out)
 
             elseif haskey(event, "jl_data")
@@ -1020,7 +1021,7 @@ function module_files(aws, modules::Vector{Symbol})
     archive = OrderedDict()
     for (p, s) in zip([load_path...; pkgd], [short_load_path...; "julia"])
         for f in get(d,p,[])
-            archive[joinpath(s, f)] = open(readbytes, joinpath(p, f))
+            archive[joinpath(s, f)] = read(joinpath(p, f))
         end
     end
 
