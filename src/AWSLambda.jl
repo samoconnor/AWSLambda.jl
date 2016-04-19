@@ -41,6 +41,9 @@ using Base.Pkg
 import Nettle: hexdigest
 
 
+# For compatibility with Julia 0.4
+using Compat.readstring
+
 
 #-------------------------------------------------------------------------------
 # AWS Lambda REST API.
@@ -870,7 +873,7 @@ end
 
 
 function lambda_include(aws, filename)
-    code = open(readall, filename)
+    code = readstring(filename)
     @lambda_call(aws, include_string)(code, filename)
 end
 
@@ -1205,6 +1208,11 @@ end
 hallink(hal, name) = hal["_links"][name]["href"]
 
 
+function apigateway(aws::SymbolDict, verb, resource; args...)
+    apigateway(aws, verb, resource, Dict(args))
+end
+
+
 function apigateway(aws::SymbolDict, verb, resource="/restapis", query=Dict())
 
     r = @SymDict(
@@ -1220,11 +1228,6 @@ function apigateway(aws::SymbolDict, verb, resource="/restapis", query=Dict())
     r = AWSCore.do_request(r)
 
     return r
-end
-
-
-function apigateway(aws::SymbolDict, verb, resource; args...)
-    apigateway(aws, verb, resource, Dict(args))
 end
 
 
