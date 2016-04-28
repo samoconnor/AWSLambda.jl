@@ -1053,15 +1053,28 @@ function create_jl_lambda_base(aws; release = "release-0.4")
 
     append!(yum_list, get(aws, :lambda_yum_packages, []))
 
-
-    # List of Julia packages to install...
-    pkg_add_list = aws[:lambda_packages]
-    pkg_clone_list = get(aws, :lambda_packages_clone, [])
-
-    if !("JSON" in pkg_add_list)
-        push!(pkg_add_list, "JSON")
+    if !("JSON" in aws[:lambda_packages])
+        push!(aws[:lambda_packages], "JSON")
     end
 
+    build_env = []
+    for (k,v) in get(aws, :lambda_build_env, Dict())
+        push!(build_env, "export $k=\"$v\"\n")
+    end
+
+    # List of Julia packages to install...
+    pkg_add_cmd = ["/var/task/bin/julia -e 'Pkg.init()'\n"]
+    pkg_using_cmd = []
+    for p in aws[:lambda_packages]
+        if isa(p, Tuple)
+            p, url = p
+            push!(pkg_add_cmd, "/var/task/bin/julia -e 'Pkg.clone(\"$url\")'\n")
+            push!(pkg_add_cmd, "/var/task/bin/julia -e 'Pkg.build(\"$p\")'\n")
+        else
+            push!(pkg_add_cmd, "/var/task/bin/julia -e 'Pkg.add(\"$p\")'\n")
+        end
+        push!(pkg_using_cmd, "/var/task/bin/julia -e 'using $p'\n")
+    end
 
     # FIXME
     # consider downloading base tarball from here:
@@ -1083,6 +1096,7 @@ function create_jl_lambda_base(aws; release = "release-0.4")
         mkdir -p /var/task/julia
         export HOME=/var/task
         export JULIA_PKGDIR=/var/task/julia
+        $(join(build_env))
 
         cd /
         if aws --region $(aws[:region]) \\
@@ -1116,15 +1130,14 @@ function create_jl_lambda_base(aws; release = "release-0.4")
                       s3://$(aws[:lambda_bucket])/jl_lambda_base.tgz
         fi
 
+        # Disable yum to prevent BinDeps.jl from using it...
+        # https://github.com/JuliaLang/BinDeps.jl/issues/168
+        chmod 000 /usr/bin/yum
+
         # Precompile Julia modules...
         /var/task/bin/julia -e 'Pkg.init()'
-        $(join(["/var/task/bin/julia -e 'Pkg.add(\"$p\")'\n" for p in pkg_add_list]))
-        $(join(["/var/task/bin/julia -e 'Pkg.clone(\"$p\")'\n" for p in pkg_clone_list]))
-#        /var/task/bin/julia -e 'Pkg.checkout(\"AWSCore\", pull=true)'
-#        /var/task/bin/julia -e 'Pkg.checkout(\"AWSSDB\", pull=true)'
-#        /var/task/bin/julia -e 'Pkg.checkout(\"AWSLambda\", pull=true)'
-        $(join(["/var/task/bin/julia -e 'using $p'\n" for p in pkg_add_list]))
-        $(join(["/var/task/bin/julia -e 'using $p'\n" for p in pkg_clone_list]))
+        $(join(pkg_add_cmd))
+        $(join(pkg_using_cmd))
 
         # Copy minimal set of files to /task-staging...
         mkdir -p /task-staging/bin
