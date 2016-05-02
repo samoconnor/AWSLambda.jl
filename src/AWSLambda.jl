@@ -906,7 +906,7 @@ function lambda_module_cache(aws)
         return [symbol(p) for p in aws[:lambda_packages]]
     end
 
-    @lambda_eval aws [symbol(splitext(f)[1]) for f in 
+    @lambda_eval aws [symbol(splitext(f)[1]) for f in
                         [[readdir(p) for p in
                             filter(isdir, Base.LOAD_CACHE_PATH)]...;]]
 end
@@ -916,7 +916,7 @@ end
 
 function local_module_cache()
 
-    [symbol(splitext(f)[1]) for f in 
+    [symbol(splitext(f)[1]) for f in
         [[readdir(p) for p in
             filter(isdir, Base.LOAD_CACHE_PATH)]...;]]
 end
@@ -1080,34 +1080,28 @@ function create_jl_lambda_base(aws; release = "release-0.4")
     # consider downloading base tarball from here:
     # https://github.com/samoconnor/AWSLambda.jl/releases/download/v0.0.10/jl_lambda_base.tgz
 
-    server_config = [(
+    ec2_bash(aws,
 
-        "cloud_config.txt", "text/cloud-config",
-
-        "packages:\n$(string([" - $p\n" for p in yum_list]...))"
-
-    ),(
-
-        "build_julia.sh", "text/x-shellscript",
-
-        """#!/bin/bash
+        """
+        cd /
 
         # Set up /var/task Lambda staging dir...
         mkdir -p /var/task/julia
         export HOME=/var/task
         export JULIA_PKGDIR=/var/task/julia
-        $(join(build_env))
+        export AWS_DEFAULT_REGION=$(aws[:region])
+        """,
 
-        cd /
-        if aws --region $(aws[:region]) \\
-            s3 cp s3://$(aws[:lambda_bucket])/jl_lambda_base.tgz \\
-                /jl_lambda_base.tgz
+        build_env...,
+
+        """
+        if aws s3 cp s3://$(aws[:lambda_bucket])/jl_lambda_base.tgz \\
+                     /jl_lambda_base.tgz
         then
             tar xzf jl_lambda_base.tgz
         else
 
             # Download Julia source code...
-            cd /
             git clone git://github.com/JuliaLang/julia.git
             cd julia
             git checkout $release
@@ -1136,9 +1130,12 @@ function create_jl_lambda_base(aws; release = "release-0.4")
 
         # Precompile Julia modules...
         /var/task/bin/julia -e 'Pkg.init()'
-        $(join(pkg_add_cmd))
-        $(join(pkg_using_cmd))
+        """,
 
+        pkg_add_cmd...,
+        pkg_using_cmd...,
+
+        """
         # Copy minimal set of files to /task-staging...
         mkdir -p /task-staging/bin
         mkdir -p /task-staging/lib/julia
@@ -1173,6 +1170,9 @@ function create_jl_lambda_base(aws; release = "release-0.4")
                    -o -name 'METADATA' \\
             | xargs rm -rf
 
+        # Copy extra bins...
+        cp /usr/bin/zip bin/
+
         # Create .zip file...
         zip -u --symlinks -r -9 /jl_lambda_base.zip *
 
@@ -1180,37 +1180,24 @@ function create_jl_lambda_base(aws; release = "release-0.4")
         aws --region $(aws[:region]) \\
             s3 cp /jl_lambda_base.zip \\
                   s3://$(aws[:lambda_bucket])/jl_lambda_base.zip
+        """,
 
-        # Suspend the build server...
-        shutdown -h now
-        """
-    )]
+        instance_name = "ocaws_jl_lambda_build_server",
 
-    policy = """{
-        "Version": "2012-10-17",
-        "Statement": [ {
-            "Effect": "Allow",
-            "Action": [ "s3:PutObject", "s3:GetObject" ],
-            "Resource": [
-                "arn:aws:s3:::$(aws[:lambda_bucket])/jl_lambda_base.*"
-            ]
-        } ]
-    }"""
+        image = "amzn-ami-hvm-2015.09.1.x86_64-gp2",
 
-    # http://docs.aws.amazon.com/lambda/latest/dg/current-supported-versions.html
-    ami = ec2(aws, @SymDict(
-            Action = "DescribeImages",
-            "Filter.1.Name" = "owner-alias",
-            "Filter.1.Value" = "amazon",
-            "Filter.2.Name" = "name",
-            "Filter.2.Value" = "amzn-ami-hvm-2015.09.1.x86_64-gp2"))
+        packages = yum_list,
 
-    create_ec2(aws, "ocaws_jl_lambda_build_server",
-                    ImageId      = ami["imagesSet"]["item"]["imageId"],
-                    InstanceType = "c3.large",
-                    KeyName      = "ssh-ec2",
-                    UserData     = server_config,
-                    Policy       = policy)
+        policy = """{
+            "Version": "2012-10-17",
+            "Statement": [ {
+                "Effect": "Allow",
+                "Action": [ "s3:PutObject", "s3:GetObject" ],
+                "Resource": [
+                    "arn:aws:s3:::$(aws[:lambda_bucket])/jl_lambda_base.*"
+                ]
+            } ]
+        }""")
 end
 
 
