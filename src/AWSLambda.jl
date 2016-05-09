@@ -6,6 +6,57 @@
 # See http://docs.aws.amazon.com/lambda/latest/dg/API_Reference.html
 #
 # Copyright Sam O'Connor 2014 - All rights reserved
+
+#=
+TODO
+
+ - Split lambda_py_wrapper into seperate lambda_wrapper.py file.
+ - Put configurable stuff (name, env vars, SNS ARN etc) in lambda_config.py
+ - Split jl_code from lambda macto into seperate lamba_wrapper.jl file.
+ - Use fixed name "lambda" for the lambda function.
+ - Put "function lambda" (and using...) in a seperate module/file "Lambda.jl".
+ - Add "function lambda_with_event" to extract args from "event" (in "Lambda.jl").
+
+ - In base .ZIP include default Lambda.jl:
+
+    lambda(func, args) = eval(func)(args...)
+
+    lambda_with_event(event) = lambda(parse(event["func"]), event["args"])
+
+ - Extend EC2 bash script to install base .ZIP as Lambda: jl_lambda_call
+
+ - To deploy a new lambda:
+
+    - send .ZIP to jl_lambda_call
+    - send "func" that:
+         unzips ZIP,
+          runs precompilation,
+          creates new zip using /var/task as a base,
+          copys the zip to S3
+          calls deploy lambda to create the new lambda
+
+@lambda_call(aws, (z)->begin
+           eval(:(using InfoZIP))
+           rm("/tmp/task", recursive=true)
+           mkpath("/tmp/task")
+           InfoZIP.unzip(z, "/tmp/task")
+           chmod("/tmp/task/bin/zip", 0o755)
+           run(`ls -l /tmp/task/bin`)
+           ENV["PATH"] *= ":/tmp/task/bin"
+           try rm("/tmp/zip.zip") end
+           run(Cmd(`zip -q -r /tmp/new.zip .`, dir="/var/task"))
+           run(Cmd(`zip -q -r /tmp/new.zip .`, dir="/tmp/task"))
+           run(`ls -l /tmp`)
+
+            FIXME - pass AWS creds in-line...
+            S3 ...
+           run(`unzip -l /tmp/new.zip`)
+
+
+       end)(z)
+
+=#
+
 #==============================================================================#
 
 
@@ -36,6 +87,7 @@ using Retry
 using SymDict
 using DataStructures
 using Glob
+using FNVHash
 using Base.Pkg
 
 import Nettle: hexdigest
@@ -101,21 +153,32 @@ end
 lambda_exists(aws, name) = lambda_configuration(aws, name) != nothing
 
 
-function create_lambda(aws, name, S3Key;
-                       S3Bucket=aws[:lambda_bucket],
-                       Handler="$name.main",
-                       Role=create_lambda_role(aws, name),
+function create_lambda(aws, name;
+                       ZipFile=nothing, 
+                       S3Key="$name.zip",
+                       S3Bucket=get(aws, :lambda_bucket, nothing),
+                       Handler="lambda_main.main",
+                       Role=role_arn(aws, "jl_lambda_call"),
                        Runtime="python2.7",
+                       MemorySize = 1024,
                        Timeout=300,
                        args...)
 
-   query = @SymDict(FunctionName = name,
-                    Code = @SymDict(S3Key, S3Bucket),
-                    Handler,
-                    Role,
-                    Runtime,
-                    Timeout,
-                    args...)
+    if ZipFile != nothing
+        ZipFile = base64encode(ZipFile)
+        Code = @SymDict(ZipFile)
+    else
+        Code = @SymDict(S3Key, S3Bucket)
+    end
+
+    query = @SymDict(FunctionName = name,
+                     Code,
+                     Handler,
+                     Role,
+                     Runtime,
+                     MemorySize,
+                     Timeout,
+                     args...)
 
     @repeat 5 try
 
@@ -128,13 +191,21 @@ function create_lambda(aws, name, S3Key;
 end
 
 
-function update_lambda(aws, name, S3Key;
+function update_lambda(aws, name;
+                       ZipFile=nothing, 
+                       S3Key="$name.zip",
                        S3Bucket=aws[:lambda_bucket], args...)
+
+    if ZipFile != nothing
+        ZipFile = base64encode(ZipFile)
+        query = @SymDict(ZipFile)
+    else
+        query = @SymDict(S3Key, S3Bucket)
+    end
 
     @sync begin
 
-        @async lambda(aws, "PUT", path="$name/code",
-                      query=@SymDict(S3Key, S3Bucket))
+        @async lambda(aws, "PUT", path="$name/code", query=query)
 
         @async if !isempty(args)
             lambda(aws, "PUT", path="$name/configuration", query=@SymDict(args...))
@@ -286,19 +357,12 @@ end
 
 
 function create_py_lambda(aws, name, py_code;
-                          Role=create_lambda_role(aws, name))
+                          Role = create_lambda_role(aws, name))
 
     delete_lambda(aws, name)
 
-    # Create .ZIP file containing "py_code"...
-    zip = create_zip("$name.py" => py_code)
-
-    # Upload .ZIP file to S3...
-    zip_filename = "ocaws_lambda_$name.zip"
-    s3_put(aws, aws[:lambda_bucket], zip_filename, zip)
-
-    # Create lambda...
-    create_lambda(aws, name, zip_filename, Role=Role, MemorySize=1024)
+    create_lambda(aws, name, ZipFile = create_zip("lambda_main.py" => py_code),
+                             Role = Role)
 end
 
 
@@ -480,6 +544,26 @@ end
 # Julia Code Support.
 #-------------------------------------------------------------------------------
 
+# FIXME rename lambda_call to just lambda
+
+# Returns an anonymous function that call "func" in the Lambda sandbox.
+# e.g. @lambda_call(aws, println)("Hello")
+#      @lambda_call(aws, x -> x*x)(4)
+#      @lambda_call(aws, [:JSON], s -> JSON.parse(s))("{}")
+
+macro lambda_call(aws, args...)
+
+    @assert length(args) <= 2
+    func = Expr(:quote, args[end])
+    modules = length(args) > 1 ? eval(args[1]) : Symbol[]
+    @assert isa(modules, Vector{Symbol})
+
+    esc(quote
+        (args...) -> invoke_jl_lambda($aws, :jl_lambda_call,
+                                            $modules, $func, args)
+    end)
+end
+
 
 # Create an AWS Lambda to run "jl_code".
 # The Julia runtime is copied from "aws[:lambda_bucket]/jl_lambda_base.zip".
@@ -491,112 +575,19 @@ function create_jl_lambda(aws, name, jl_code,
 
     # Find files and load path for required modules...
     load_path, mod_files = module_files(aws, modules)
-    py_load_path = "[$(join(["'$d'" for d in load_path], ","))]"
+    py_config = ["os.environ['JULIA_LOAD_PATH'] += '$(join(load_path, ":"))'\n"]
 
+    # Get env vars from "aws" or "options"...
     env = get(options, :env,
           get(aws, :lambda_env, Dict()))
-    py_env = join(["os.environ['$n'] = '$v'" for (n,v) in env], "\n")
+    for (n,v) in env
+        push!(py_config, "os.environ['$n'] = '$v'\n")
+    end
 
+    # Get error topic from "aws" or "options"...
     error_sns_arn = get(options, :error_sns_arn,
                     get(aws, :lambda_error_sns_arn, ""))
-
-    # Wrapper to set up Julia environemnt and run "jl_code"...
-    const lambda_py_wrapper =
-    """
-    from __future__ import print_function
-    import subprocess
-    import os
-    import json
-    import threading
-    import time
-    import select
-
-    # Set Julia package directory...
-    root = os.environ['LAMBDA_TASK_ROOT']
-    os.environ['HOME'] = '/tmp/'
-    os.environ['JULIA_PKGDIR'] = root + '/julia'
-    load_path = ':'.join([root + '/' + d for d in $py_load_path])
-    os.environ['JULIA_LOAD_PATH'] = load_path
-    $py_env
-
-    julia_proc = None
-
-    # Start Julia interpreter ...
-    def start_julia():
-        global julia_proc
-        julia_proc = subprocess.Popen([root + '/bin/julia', root + "/$name.jl"],
-                                      stdin=subprocess.PIPE,
-                                      stdout=subprocess.PIPE,
-                                      stderr=subprocess.STDOUT)
-
-    # Pass args to Julia as JSON with null,newline terminator...
-    def julia_eval(event, context):
-        json.dump({'event': event, 'context': context.__dict__},
-                  julia_proc.stdin,
-                  default=lambda o: '')
-        julia_proc.stdin.write('\\0\\n')
-        julia_proc.stdin.flush()
-
-    def main(event, context):
-
-        # Clean up old return value file...
-        if os.path.isfile('/tmp/lambda_out'):
-            os.remove('/tmp/lambda_out')
-
-        if julia_proc is None or julia_proc.poll() is not None:
-            start_julia()
-
-        # Pass "event" to Julia...
-        threading.Thread(target=julia_eval, args=(event, context)).start()
-
-        # Calcualte execution time limit...
-        time_limit = time.time() + context.get_remaining_time_in_millis()/1000.0
-        time_limit -= 5.0
-
-        # Wait for output...
-        out = ''
-        timeout = True
-        while time.time() < time_limit:
-            ready = select.select([julia_proc.stdout], [], [], time_limit - time.time())
-            if julia_proc.stdout in ready[0]:
-                line = julia_proc.stdout.readline()
-                if line == '\\0\\n' or line == '':
-                    timeout = False
-                    break
-                print(line, end='')
-                out += line
-
-        if timeout:
-            print('Timeout!')
-            out += 'Timeout!\\n'
-
-        # Check exit status...
-        if julia_proc.poll() != None or timeout:
-            if '$error_sns_arn' != '':
-                if timeout:
-                    subject = 'Lambda Timeout: $name '
-                else:
-                    subject = 'Lambda Error: $name '
-                subject += json.dumps(event, separators=(',',':'))
-                error = '$name\\n' + json.dumps(event) + '\\n\\n' + out
-                import boto3
-                try:
-                    boto3.client('sns').publish(TopicArn='$error_sns_arn',
-                                                Message=error,
-                                                Subject=subject[:100])
-                except Exception:
-                    pass
-
-            raise Exception(out)
-
-        # Return content of output file...
-        if os.path.isfile('/tmp/lambda_out'):
-            with open('/tmp/lambda_out', 'r') as f:
-                return {'jl_data': f.read(), 'stdout': out}
-        else:
-            return {'stdout': out}
-    """
-
+    push!(py_config, "error_sns_arn = '$error_sns_arn'\n")
 
     # Start with zipfile from options...
     zipfile = get(options, :zipfile, UInt8[])
@@ -605,13 +596,13 @@ function create_jl_lambda(aws, name, jl_code,
     # Add lambda source and module files to zip...
     open_zip(zipfile) do z
         merge!(z, mod_files)
-        merge!(z, OrderedDict("$name.py" => lambda_py_wrapper,
-                              "$name.jl" => jl_code))
+        z["lambda_config.py"] = join(py_config)
+        z["module_$name.jl"] = jl_code
     end
 
-    # SHA256 Hash of deployed Julia code is stored in the Description field.
+    # FNV hash of deployed Julia code is stored in the Description field.
     old_config = lambda_configuration(aws, name)
-    new_code_hash = hexdigest("sha256", serialize64(Dict(open_zip(zipfile))))
+    new_code_hash = zipfile |> open_zip |> Dict |> serialize64 |> fnv32
     old_code_hash = get(old_config, :Description, nothing)
 
     # Don't create a new lambda if one already exists with same code...
@@ -619,51 +610,96 @@ function create_jl_lambda(aws, name, jl_code,
         return
     end
 
-    # Add new files to base Julia system .ZIP file...
-    base_file=get(aws, :lambda_base, "jl_lambda_base.zip")
-    lambda_id="jl_lambda_$(name)_$(new_code_hash)"
-    s3_put(aws, aws[:lambda_bucket], "$lambda_id.new.zip", zipfile)
-    merge_lambda_zip(aws, "$lambda_id.zip", base_file, ["$lambda_id.new.zip"])
+    options[:Description] = new_code_hash
 
-    options = @SymDict(MemorySize=1024,
-                       Description=new_code_hash,
-                       options...)
+    deploy_lambda = @lambda_call(aws,
+        [:AWSLambda, :AWSIAM, :InfoZIP, :SymDict, :Retry],
+        (aws, zipfile, name, options, old_config) -> begin
 
-    # Deploy the lambda to AWS...
-    if old_config == nothing
-        r = create_lambda(aws, name, "$lambda_id.zip"; options...)
+            AWSCore.set_debug_level(1)
+
+            # Unzip lambda source and modules files to /tmp...
+            mktempdir() do tmpdir
+
+                InfoZIP.unzip(zipfile, tmpdir)
+
+                # Create module precompilation directory under /tmp...
+                ji_path = Base.LOAD_CACHE_PATH[1]
+                ji_path = replace(ji_path, "/var/task", tmpdir, 1)
+                mkpath(ji_path)
+
+                # FIXME use load_path for new modules...
+
+                precompile_cmd = """
+                    insert!(LOAD_PATH, 1, "$tmpdir")
+                    insert!(Base.LOAD_CACHE_PATH, 1, "$ji_path")
+                    using module_$name
+                    """
+
+                @show precompile_cmd
+
+                run(`julia -e $precompile_cmd`)
+
+                # Create new ZIP combining base image and new files from /tmp...
+                run(`rm -f /tmp/lambda.zip`)
+                run(Cmd(`zip -q -r /tmp/lambda.zip .`, dir="/var/task"))
+                run(Cmd(`zip -q -r /tmp/lambda.zip .`, dir=tmpdir))
+                options[:ZipFile] = read("/tmp/lambda.zip")
+
+                run(`rm -f /tmp/lambda.zip`)
+            end
+
+function x_create_lambda(aws, name;
+                       ZipFile=nothing, 
+                       S3Key="$name.zip",
+                       S3Bucket=get(aws, :lambda_bucket, nothing),
+                       Handler="lambda_main.main",
+                       Role=role_arn(aws, "jl_lambda_call"),
+                       Runtime="python2.7",
+                       MemorySize = 1024,
+                       Timeout=300,
+                       args...)
+
+@show length(ZipFile)
+    if ZipFile != nothing
+        ZipFile = base64encode(ZipFile)
+@show length(ZipFile)
+        Code = @SymDict(ZipFile)
     else
-        r = update_lambda(aws, name, "$lambda_id.zip"; options...)
+        Code = @SymDict(S3Key, S3Bucket)
     end
 
-    if get(aws, :lambda_precompile, true)
+    query = @SymDict(FunctionName = name,
+                     Code,
+                     Handler,
+                     Role,
+                     Runtime,
+                     MemorySize,
+                     Timeout,
+                     args...)
 
-        # Download .ji cache from the lambda sandbox.
-        r = invoke_lambda(aws, name, jl_precompile = true)
-        ji_cache = deserialize64(r[:jl_data])
+    @repeat 5 try
 
-        if !isempty(ji_cache)
+println("D")
 
-            # Add .ji cache files to .ZIP...
-            create_lambda_zip(aws, "$lambda_id.ji.zip",
-                              "$lambda_id.zip", ji_cache)
+        AWSLambda.lambda(aws, "POST", query=query)
 
-            # Update lambda using new .ZIP...
-            update_lambda(aws, name, "$lambda_id.ji.zip")
-        end
+    catch e
+        # Retry in case Role was just created and is not yet active...
+        @delay_retry if e.code == "400" end
     end
+end
 
+            # Deploy the lambda to AWS...
+            if old_config == nothing
+                r = x_create_lambda(aws, name; options...)
+            else
+                r = update_lambda(aws, name; options...)
+            end
+println("E")
+        end)
 
-    @sync begin
-
-        # Update config...
-        @async lambda_update_configuration(aws, name, options)
-
-        # Clean up S3 files...
-        for z in [".new.zip", ".zip", ".ji.zip"]
-            @async s3_delete(aws, aws[:lambda_bucket], "$lambda_id$z")
-        end
-    end
+    deploy_lambda(aws, zipfile, name, options, old_config)
 end
 
 
@@ -745,81 +781,37 @@ macro lambda(args...)
 
     options = length(args) > 2 ? esc(args[2]) : :(Dict())
 
+    # Rewrite function name to be :lambda...
     call, body = f.args
     name = call.args[1]
+    call.args[1] = :lambda_function
     args = call.args[2:end]
 
     # Split "using module" lines out of body...
     modules = Expr(:block, filter(e->isa(e, Expr) && e.head == :using, body.args)...)
-
     body.args = filter(e->!isa(e, Expr) || e.head != :using, body.args)
 
+    # Generate code to extract args from event Dict...
     arg_names = [isa(a, Expr) ? a.args[1] : a for a in args]
     get_args = join(["""get(event,"$a",nothing)""" for a in arg_names], ", ")
 
     body = clean_ex(body)
 
-    jl_code =
-    """
-        eval(Base, :(is_interactive = true))
+    jl_code = """
+        __precompile__()
 
-        insert!(Base.LOAD_CACHE_PATH, 1, ENV["LAMBDA_TASK_ROOT"])
-        mkpath("/tmp/jl_cache")
-        insert!(Base.LOAD_CACHE_PATH, 1, "/tmp/jl_cache")
-
-        using JSON
+        module module_$name
 
         $modules
 
-        # Define lambda function...
         function $call
             $body
         end
 
-        # Run lambda function...
-        function main(event, context)
+        lambda_function_with_event(event) = lambda($get_args)
 
-            global LAMBDA_CONTEXT = context
-
-            out = open("/tmp/lambda_out", "w")
-
-            if haskey(event, "jl_precompile")
-
-                cd("/tmp/jl_cache")
-                b64_out = Base64EncodePipe(out)
-                serialize(b64_out, [f => read(f) for f in readdir()])
-                close(b64_out)
-
-            elseif haskey(event, "jl_data")
-
-                args = deserialize(Base64DecodePipe(IOBuffer(event["jl_data"])))
-                b64_out = Base64EncodePipe(out)
-                serialize(b64_out, $name(args...))
-                close(b64_out)
-
-            else
-                JSON.print(out, $name($get_args))
-            end
-
-            close(out)
-            println("\\0")
         end
-
-        # Read from STDIN into buf...
-        buf = UInt8[]
-        while true
-            chunk = readavailable(STDIN)
-            append!(buf, chunk)
-            @assert length(chunk) > 0
-
-            # When end of input is found, call main()...
-            if length(buf) >  1 && buf[end-1:end] == ['\\0','\\n']
-                input = JSON.parse(UTF8String(buf))
-                main(input["event"], input["context"])
-                empty!(buf)
-            end
-        end
-    """
+        """
 
     # Add "aws" dict as first arg...
     insert!(f.args[1].args, 2, :aws)
@@ -844,30 +836,6 @@ end
 
 
 
-# Create anonymous function to call "func" in the Lambda sandbox.
-
-macro lambda_call(aws, func)
-
-    func = Expr(:quote, func)
-
-    esc(quote
-        (args...) -> begin
-            Retry.@repeat 2 try
-
-                invoke_jl_lambda($aws, :jl_lambda_call, $func, args)
-
-            catch e
-                @retry if e.code == "404"
-                    @λ $aws function jl_lambda_call(func, args)
-                        eval(func)(args...)
-                    end
-                end
-            end
-        end
-    end)
-end
-
-
 function lambda_include_string(aws, code)
     @lambda_call(aws, include_string)(code)
 end
@@ -882,17 +850,6 @@ end
 # Evaluate "expr" in the Lambda sandbox.
 
 macro lambda_eval(aws, expr)
-
-    # Separate "using" statements from expression...
-    usings = Expr(:block, filter(e->isa(e, Expr) && e.head == :using, expr.args)...)
-    expr.args = filter(e->!isa(e, Expr) || e.head != :using, expr.args)
-
-    # Eval "using" statements before rest of expression...
-    expr = quote
-        eval($(Expr(:quote, usings)))
-        eval($(Expr(:quote, expr)))
-    end
-
     esc(quote @lambda_call($aws,()->$expr)() end)
 end
 
@@ -901,10 +858,6 @@ end
 # List of modules in the Lambda sandbox ".ji" cache.
 
 function lambda_module_cache(aws)
-
-    if !lambda_exists(aws, "jl_lambda_call")
-        return [symbol(p) for p in aws[:lambda_packages]]
-    end
 
     @lambda_eval aws [symbol(splitext(f)[1]) for f in
                         [[readdir(p) for p in
@@ -1038,7 +991,10 @@ end
 # Takes about 1 hour, (or about 5 minutes if full rebuild is not done).
 # Upload the Julia runtime to "aws[:lambda_bucket]/jl_lambda_base.zip".
 
-function create_jl_lambda_base(aws; release = "release-0.4")
+function create_jl_lambda_base(aws; release = "0.4", ssh_key=nothing)
+
+    # Role assumed by basic "jl_lambda_call" lambda function...
+    role = create_lambda_role(aws, "jl_lambda_call")
 
     # List of Amazon Linux packages to install...
     yum_list = ["git",
@@ -1053,8 +1009,24 @@ function create_jl_lambda_base(aws; release = "release-0.4")
 
     append!(yum_list, get(aws, :lambda_yum_packages, []))
 
-    if !("JSON" in aws[:lambda_packages])
-        push!(aws[:lambda_packages], "JSON")
+    # Default Julia packages...
+    pkg_list = ["Compat",
+                "FNVHash",
+                "InfoZIP",
+                "AWSCore",
+                "AWSEC2",
+                "AWSIAM",
+                "AWSLambda",
+                "AWSS3",
+                "AWSSNS",
+                "AWSSQS",
+                "AWSSES",
+                "AWSSDB"]
+
+    for p in get(aws, :lambda_packages, [])
+        if !(p in pkg_list)
+            push!(pkg_list, p)
+        end
     end
 
     build_env = []
@@ -1063,128 +1035,153 @@ function create_jl_lambda_base(aws; release = "release-0.4")
     end
 
     # List of Julia packages to install...
-    pkg_add_cmd = ["/var/task/bin/julia -e 'Pkg.init()'\n"]
-    pkg_using_cmd = []
-    for p in aws[:lambda_packages]
+    pkg_add_cmd = "Pkg.init(); "
+    pkg_using_cmd = "using AWSLambdaWrapper; "
+    for p in pkg_list
         if isa(p, Tuple)
             p, url = p
-            push!(pkg_add_cmd, "/var/task/bin/julia -e 'Pkg.clone(\"$url\")'\n")
-            push!(pkg_add_cmd, "/var/task/bin/julia -e 'Pkg.build(\"$p\")'\n")
+            pkg_add_cmd *= "Pkg.clone(\"$url\"); "
+            pkg_add_cmd *= "Pkg.build(\"$p\"); "
         else
-            push!(pkg_add_cmd, "/var/task/bin/julia -e 'Pkg.add(\"$p\")'\n")
+            pkg_add_cmd *= "Pkg.add(\"$p\"); "
         end
-        push!(pkg_using_cmd, "/var/task/bin/julia -e 'using $p'\n")
+        pkg_using_cmd *= "using $p; "
     end
+
+    # ZIP archive of wrapper code...
+    zip = ["lambda_main.py",
+           "lambda_config.py",
+           "AWSLambdaWrapper.jl",
+           "module_jl_lambda_call.jl"]
+    zip = [f => read(joinpath(dirname(@__FILE__), f)) for f in zip]
+    zip = base64encode(create_zip(zip))
+
 
     # FIXME
     # consider downloading base tarball from here:
     # https://github.com/samoconnor/AWSLambda.jl/releases/download/v0.0.10/jl_lambda_base.tgz
 
+    bash_script = [
+
+    """
+    cd /
+
+    # Set up /var/task Lambda staging dir...
+    mkdir -p /var/task/julia
+    export HOME=/var/task
+    export JULIA_PKGDIR=/var/task/julia
+    export AWS_DEFAULT_REGION=$(aws[:region])
+    """,
+
+    build_env...,
+
+    """
+    if aws s3 cp s3://$(aws[:lambda_bucket])/jl_lambda_base.tgz \\
+                 /jl_lambda_base.tgz
+    then
+        tar xzf jl_lambda_base.tgz
+    else
+
+        # Download Julia source code...
+        git clone git://github.com/JuliaLang/julia.git
+        cd julia
+        git checkout release-$release
+
+        # Configure Julia for the Xeon E5-2680 CPU used by AWS Lambda...
+        cp Make.inc Make.inc.orig
+        find='OPENBLAS_TARGET_ARCH=.*\$'
+        repl='OPENBLAS_TARGET_ARCH=SANDYBRIDGE\\nMARCH=core-avx-i'
+        sed s/\$find/\$repl/ < Make.inc.orig > Make.inc
+
+        # Build and install Julia under /var/task...
+        make -j2 prefix= DESTDIR=/var/task all
+        make prefix= DESTDIR=/var/task install
+
+        # Save tarball of raw Julia build...
+        cd /
+        tar czfP jl_lambda_base.tgz var/task
+        aws --region $(aws[:region]) \\
+            s3 cp /jl_lambda_base.tgz \\
+                  s3://$(aws[:lambda_bucket])/jl_lambda_base.tgz
+    fi
+
+    # Disable yum to prevent BinDeps.jl from using it...
+    # https://github.com/JuliaLang/BinDeps.jl/issues/168
+    chmod 000 /usr/bin/yum
+
+    # Install Julia modules...
+    /var/task/bin/julia -e '$pkg_add_cmd'
+    echo $zip | base64 -d > /tmp/jl.zip && unzip -d /var/task /tmp/jl.zip
+
+    # Precompile modules...
+    JULIA_LOAD_PATH=/var/task /var/task/bin/julia -e '$pkg_using_cmd'
+
+    # Copy minimal set of files to /task-staging...
+    mkdir -p /task-staging/bin
+    mkdir -p /task-staging/lib/julia
+
+    cd /task-staging
+
+    cp /var/task/bin/julia bin/
+    cp -a /var/task/lib/julia/*.so* lib/julia
+    rm -f lib/julia/*-debug.so
+    cp -a /usr/lib64/libgfortran.so* lib/julia
+    cp -a /usr/lib64/libquadmath.so* lib/julia
+    cp /usr/bin/zip bin/
+
+    # Copy pre-compiled modules to /tmp/task...
+    cp -a /var/task/julia .
+    chmod -R a+r julia/lib/
+    cp -a /var/task/*.jl .
+    cp -a /var/task/*.py .
+
+    # Remove unnecessary files...
+    find julia -name '.git' \\
+            -o -name '.cache' \\
+            -o -name '.travis.yml' \\
+            -o -name '.gitignore' \\
+            -o -name 'REQUIRE' \\
+            -o -name 'test' \\
+            -o -path '*/deps/downloads' \\
+            -o -path '*/deps/builds' \\
+            -o \\( -type f -path '*/deps/src/*' ! -name '*.so.*' \\) \\
+            -o -path '*/deps/usr/include' \\
+            -o -path '*/deps/usr/bin' \\
+            -o -path '*/deps/usr/lib/*.a' \\
+            -o -name 'doc' \\
+            -o -name '*.md' \\
+            -o -name 'METADATA' \\
+        | xargs rm -rf
+
+
+    # Create .zip file...
+    zip -u --symlinks -r -9 /jl_lambda_base.zip *
+
+    # Delete Lambda function...
+    aws --region us-east-1 \\
+        lambda delete-function --function-name "jl_lambda_call" || true
+
+    # Create Lambda function...
+    aws --region $(aws[:region]) \\
+        lambda create-function \\
+            --function-name "jl_lambda_call" \\
+            --runtime "python2.7" \\
+            --role "$role" \\
+            --timeout 300 \\
+            --handler "lambda_main.main" \\
+            --memory-size 1024 \\
+            --zip-file fileb:///jl_lambda_base.zip
+    """]
+
     ec2_bash(aws,
 
-        """
-        cd /
-
-        # Set up /var/task Lambda staging dir...
-        mkdir -p /var/task/julia
-        export HOME=/var/task
-        export JULIA_PKGDIR=/var/task/julia
-        export AWS_DEFAULT_REGION=$(aws[:region])
-        """,
-
-        build_env...,
-
-        """
-        if aws s3 cp s3://$(aws[:lambda_bucket])/jl_lambda_base.tgz \\
-                     /jl_lambda_base.tgz
-        then
-            tar xzf jl_lambda_base.tgz
-        else
-
-            # Download Julia source code...
-            git clone git://github.com/JuliaLang/julia.git
-            cd julia
-            git checkout $release
-
-            # Configure Julia for the Xeon E5-2680 CPU used by AWS Lambda...
-            cp Make.inc Make.inc.orig
-            find='OPENBLAS_TARGET_ARCH=.*\$'
-            repl='OPENBLAS_TARGET_ARCH=SANDYBRIDGE\\nMARCH=core-avx-i'
-            sed s/\$find/\$repl/ < Make.inc.orig > Make.inc
-
-            # Build and install Julia under /var/task...
-            make -j2 prefix= DESTDIR=/var/task all
-            make prefix= DESTDIR=/var/task install
-
-            # Save tarball of raw Julia build...
-            cd /
-            tar czfP jl_lambda_base.tgz var/task
-            aws --region $(aws[:region]) \\
-                s3 cp /jl_lambda_base.tgz \\
-                      s3://$(aws[:lambda_bucket])/jl_lambda_base.tgz
-        fi
-
-        # Disable yum to prevent BinDeps.jl from using it...
-        # https://github.com/JuliaLang/BinDeps.jl/issues/168
-        chmod 000 /usr/bin/yum
-
-        # Precompile Julia modules...
-        /var/task/bin/julia -e 'Pkg.init()'
-        """,
-
-        pkg_add_cmd...,
-        pkg_using_cmd...,
-
-        """
-        # Copy minimal set of files to /task-staging...
-        mkdir -p /task-staging/bin
-        mkdir -p /task-staging/lib/julia
-        cd /task-staging
-        cp /var/task/bin/julia bin/
-        cp -a /var/task/lib/julia/*.so* lib/julia
-        rm -f lib/julia/*-debug.so
-        cp -a /usr/lib64/libgfortran.so* lib/julia
-        cp -a /usr/lib64/libquadmath.so* lib/julia
-
-        # Copy pre-compiled modules to /tmp/task...
-        cp -a /var/task/julia .
-        chmod -R a+r julia/lib/
-        find julia -name '.git' \\
-                   -o -name '.cache' \\
-                   -o -name '.travis.yml' \\
-                   -o -name '.gitignore' \\
-                   -o -name 'REQUIRE' \\
-                   -o -name 'test' \\
-                   -o -path '*/deps/downloads' \\
-                   -o -path '*/deps/builds' \\
-                   -o \\( \\
-                        -type f \\
-                        -path '*/deps/src/*' \\
-                      ! -name '*.so.*' \\
-                    \\) \\
-                   -o -path '*/deps/usr/include' \\
-                   -o -path '*/deps/usr/bin' \\
-                   -o -path '*/deps/usr/lib/*.a' \\
-                   -o -name 'doc' \\
-                   -o -name '*.md' \\
-                   -o -name 'METADATA' \\
-            | xargs rm -rf
-
-        # Copy extra bins...
-        cp /usr/bin/zip bin/
-
-        # Create .zip file...
-        zip -u --symlinks -r -9 /jl_lambda_base.zip *
-
-        # Upload .zip file to S3...
-        aws --region $(aws[:region]) \\
-            s3 cp /jl_lambda_base.zip \\
-                  s3://$(aws[:lambda_bucket])/jl_lambda_base.zip
-        """,
+        bash_script...,
 
         instance_name = "ocaws_jl_lambda_build_server",
 
         image = "amzn-ami-hvm-2015.09.1.x86_64-gp2",
+
+        ssh_key = ssh_key,
 
         packages = yum_list,
 
@@ -1192,12 +1189,21 @@ function create_jl_lambda_base(aws; release = "release-0.4")
             "Version": "2012-10-17",
             "Statement": [ {
                 "Effect": "Allow",
+                "Action": "lambda:*",
+                "Resource": "*"
+            }, {
+                "Effect": "Allow",
+                "Action": "iam:PassRole",
+                "Resource": "*"
+            }, {
+                "Effect": "Allow",
                 "Action": [ "s3:PutObject", "s3:GetObject" ],
                 "Resource": [
                     "arn:aws:s3:::$(aws[:lambda_bucket])/jl_lambda_base.*"
                 ]
             } ]
         }""")
+
 end
 
 

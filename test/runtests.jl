@@ -20,26 +20,35 @@ AWSCore.set_debug_level(1)
 # Load credentials...
 #-------------------------------------------------------------------------------
 
-aws = AWSCore.aws_config(
-                         region = "ap-northeast-1",
-                         lambda_bucket = "ocaws.jl.lambdatest.tokyo",
-                         #region = "us-east-1",
-                         #lambda_bucket = "ocaws.jl.lambdatest",
-                         lambda_packages = ["Requests",
-                                            "Nettle",
-                                            "LightXML",
-                                            "JSON",
-                                            "DataStructures",
-                                            "StatsBase",
-                                            "DataFrames",
-                                            "DSP",
-                                            "GZip",
-                                            "ZipFile",
-                                            "IniFile",
-                                            "SymDict",
-                                            "XMLDict",
-                                            "Retry"
-                                           ])
+aws = aws_config(
+
+    region = "us-east-1",
+    lambda_bucket = "octech.com.au.jl.lambda",
+
+    lambda_force_update = true,
+
+    lambda_build_env = 
+        Dict("JULIA_BINDEPS_IGNORE_SYSTEM_FONT_LIBS" => "1",
+             "JULIA_BINDEPS_DISABLE_SYSTEM_PACKAGE_MANAGERS" => "1"),
+
+    disabled_lambda_packages = 
+        ["DataFrames",
+         "DSP",
+         "Fontconfig",
+         ("Cairo", "https://github.com/samoconnor/Cairo.jl.git"),
+         "Gadfly"],
+
+    disabled_lambda_yum_packages = 
+        ["libpng-devel",
+         "pixman-devel",
+         "glib2-devel",
+         "libxml2-devel"])
+
+
+create_jl_lambda_base(aws, ssh_key="octechkey")
+
+
+#=
 
 #create_jl_lambda_base(aws)
 
@@ -132,6 +141,7 @@ apigateway_create(aws, "count_primes", (:low, :high))
 end
 
 
+=#
 
 #==============================================================================#
 # End of file.
