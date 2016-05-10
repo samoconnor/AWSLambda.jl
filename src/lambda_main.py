@@ -62,6 +62,7 @@ def main(event, context):
         os.remove('/tmp/lambda_out')
 
     # Start or restart the Julia interpreter as needed...
+    global julia_proc
     if julia_proc is None or julia_proc.poll() is not None:
         start_julia()
 
@@ -86,13 +87,22 @@ def main(event, context):
             print(line, end='')
             out += line
 
+    # Terminate Julia process on timeout...
     if not complete:
         print('Timeout!')
         out += 'Timeout!\n'
-        julia_proc.terminate()
+        p = julia_proc
+        julia_proc = None
+        p.terminate()
+        while p.poll() == None:
+            ready = select.select([p.stdout], [], [], 1)
+            if p.stdout in ready[0]:
+                line = p.stdout.readline()
+                print(line, end='')
+                out += line
 
     # Check exit status...
-    if julia_proc.poll() != None or not complete:
+    if julia_proc == None or julia_proc.poll() != None:
         if error_sns_arn != '':
             subject = 'Lambda ' + ('Error: ' if complete else 'Timeout: ')     \
                     + name + json.dumps(event, separators=(',',':'))

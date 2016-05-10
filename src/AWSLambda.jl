@@ -602,7 +602,7 @@ function create_jl_lambda(aws, name, jl_code,
 
     # FNV hash of deployed Julia code is stored in the Description field.
     old_config = lambda_configuration(aws, name)
-    new_code_hash = zipfile |> open_zip |> Dict |> serialize64 |> fnv32
+    new_code_hash = zipfile |> open_zip |> Dict |> serialize64 |> fnv32 |> hex
     old_code_hash = get(old_config, :Description, nothing)
 
     # Don't create a new lambda if one already exists with same code...
@@ -613,7 +613,7 @@ function create_jl_lambda(aws, name, jl_code,
     options[:Description] = new_code_hash
 
     deploy_lambda = @lambda_call(aws,
-        [:AWSLambda, :AWSIAM, :InfoZIP, :SymDict, :Retry],
+        [:AWSLambda, :AWSIAM, :InfoZIP, :SymDict, :Retry, :JSON],
         (aws, zipfile, name, options, old_config) -> begin
 
             AWSCore.set_debug_level(1)
@@ -636,14 +636,17 @@ function create_jl_lambda(aws, name, jl_code,
                     using module_$name
                     """
 
-                @show precompile_cmd
-
                 run(`julia -e $precompile_cmd`)
+
+#FIXME needed?
+run(`chmod -R a+r $ji_path`)
 
                 # Create new ZIP combining base image and new files from /tmp...
                 run(`rm -f /tmp/lambda.zip`)
-                run(Cmd(`zip -q -r /tmp/lambda.zip .`, dir="/var/task"))
-                run(Cmd(`zip -q -r /tmp/lambda.zip .`, dir=tmpdir))
+                run(Cmd(`zip -q --symlinks -r -9 /tmp/lambda.zip .`,
+                        dir="/var/task"))
+                run(Cmd(`zip -q --symlinks -r -9 /tmp/lambda.zip .`,
+                        dir=tmpdir))
                 options[:ZipFile] = read("/tmp/lambda.zip")
 
                 run(`rm -f /tmp/lambda.zip`)
@@ -654,16 +657,14 @@ function x_create_lambda(aws, name;
                        S3Key="$name.zip",
                        S3Bucket=get(aws, :lambda_bucket, nothing),
                        Handler="lambda_main.main",
-                       Role=role_arn(aws, "jl_lambda_call"),
+                       Role=role_arn(aws, "jl_lambda_call_lambda_role"),
                        Runtime="python2.7",
                        MemorySize = 1024,
                        Timeout=300,
                        args...)
 
-@show length(ZipFile)
     if ZipFile != nothing
         ZipFile = base64encode(ZipFile)
-@show length(ZipFile)
         Code = @SymDict(ZipFile)
     else
         Code = @SymDict(S3Key, S3Bucket)
@@ -680,8 +681,6 @@ function x_create_lambda(aws, name;
 
     @repeat 5 try
 
-println("D")
-
         AWSLambda.lambda(aws, "POST", query=query)
 
     catch e
@@ -690,13 +689,21 @@ println("D")
     end
 end
 
+            # FIXME Upload to S3 because direct ZipFile upload to Lambda hangs...
+            options[:S3Key] = "$name.$(options[:Description]).zip"
+            s3_put(aws, aws[:lambda_bucket], options[:S3Key], options[:ZipFile])
+            delete!(options, :ZipFile)
+
             # Deploy the lambda to AWS...
             if old_config == nothing
                 r = x_create_lambda(aws, name; options...)
             else
                 r = update_lambda(aws, name; options...)
             end
-println("E")
+
+            # FIXME See above
+            s3_delete(aws, aws[:lambda_bucket], options[:S3Key])
+
         end)
 
     deploy_lambda(aws, zipfile, name, options, old_config)
@@ -991,7 +998,7 @@ end
 # Takes about 1 hour, (or about 5 minutes if full rebuild is not done).
 # Upload the Julia runtime to "aws[:lambda_bucket]/jl_lambda_base.zip".
 
-function create_jl_lambda_base(aws; release = "0.4", ssh_key=nothing)
+function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
 
     # Role assumed by basic "jl_lambda_call" lambda function...
     role = create_lambda_role(aws, "jl_lambda_call")
@@ -1035,7 +1042,7 @@ function create_jl_lambda_base(aws; release = "0.4", ssh_key=nothing)
     end
 
     # List of Julia packages to install...
-    pkg_add_cmd = "Pkg.init(); "
+    pkg_add_cmd = "Pkg.init(); Pkg.update(); "
     pkg_using_cmd = "using AWSLambdaWrapper; "
     for p in pkg_list
         if isa(p, Tuple)
@@ -1085,7 +1092,7 @@ function create_jl_lambda_base(aws; release = "0.4", ssh_key=nothing)
         # Download Julia source code...
         git clone git://github.com/JuliaLang/julia.git
         cd julia
-        git checkout release-$release
+        git checkout $release
 
         # Configure Julia for the Xeon E5-2680 CPU used by AWS Lambda...
         cp Make.inc Make.inc.orig
