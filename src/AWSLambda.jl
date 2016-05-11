@@ -10,50 +10,10 @@
 #=
 TODO
 
- - Split lambda_py_wrapper into seperate lambda_wrapper.py file.
- - Put configurable stuff (name, env vars, SNS ARN etc) in lambda_config.py
- - Split jl_code from lambda macto into seperate lamba_wrapper.jl file.
- - Use fixed name "lambda" for the lambda function.
- - Put "function lambda" (and using...) in a seperate module/file "Lambda.jl".
- - Add "function lambda_with_event" to extract args from "event" (in "Lambda.jl").
+ - rename @lambda_call to just @lambda ?
+ - use load_path for new modules...
+ - Upload to S3 because direct ZipFile upload to Lambda hangs...
 
- - In base .ZIP include default Lambda.jl:
-
-    lambda(func, args) = eval(func)(args...)
-
-    lambda_with_event(event) = lambda(parse(event["func"]), event["args"])
-
- - Extend EC2 bash script to install base .ZIP as Lambda: jl_lambda_call
-
- - To deploy a new lambda:
-
-    - send .ZIP to jl_lambda_call
-    - send "func" that:
-         unzips ZIP,
-          runs precompilation,
-          creates new zip using /var/task as a base,
-          copys the zip to S3
-          calls deploy lambda to create the new lambda
-
-@lambda_call(aws, (z)->begin
-           eval(:(using InfoZIP))
-           rm("/tmp/task", recursive=true)
-           mkpath("/tmp/task")
-           InfoZIP.unzip(z, "/tmp/task")
-           chmod("/tmp/task/bin/zip", 0o755)
-           run(`ls -l /tmp/task/bin`)
-           ENV["PATH"] *= ":/tmp/task/bin"
-           try rm("/tmp/zip.zip") end
-           run(Cmd(`zip -q -r /tmp/new.zip .`, dir="/var/task"))
-           run(Cmd(`zip -q -r /tmp/new.zip .`, dir="/tmp/task"))
-           run(`ls -l /tmp`)
-
-            FIXME - pass AWS creds in-line...
-            S3 ...
-           run(`unzip -l /tmp/new.zip`)
-
-
-       end)(z)
 
 =#
 
@@ -68,7 +28,7 @@ module AWSLambda
 
 export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        async_lambda, create_jl_lambda, invoke_jl_lambda, create_lambda_role,
-       @λ, @lambda, serialize64, deserialize64,
+       @λ, @lambda,
        lambda_compilecache,
        create_jl_lambda_base, merge_lambda_zip,
        lambda_configuration,
@@ -154,11 +114,11 @@ lambda_exists(aws, name) = lambda_configuration(aws, name) != nothing
 
 
 function create_lambda(aws, name;
-                       ZipFile=nothing, 
+                       ZipFile=nothing,
                        S3Key="$name.zip",
                        S3Bucket=get(aws, :lambda_bucket, nothing),
                        Handler="lambda_main.main",
-                       Role=role_arn(aws, "jl_lambda_call"),
+                       Role=role_arn(aws, "jl_lambda_call_lambda_role"),
                        Runtime="python2.7",
                        MemorySize = 1024,
                        Timeout=300,
@@ -192,9 +152,10 @@ end
 
 
 function update_lambda(aws, name;
-                       ZipFile=nothing, 
+                       ZipFile=nothing,
                        S3Key="$name.zip",
-                       S3Bucket=aws[:lambda_bucket], args...)
+                       S3Bucket=get(aws, :lambda_bucket, nothing),
+                       args...)
 
     if ZipFile != nothing
         ZipFile = base64encode(ZipFile)
@@ -366,187 +327,42 @@ function create_py_lambda(aws, name, py_code;
 end
 
 
-
-#-------------------------------------------------------------------------------
-# S3 ZIP File Patching.
-#-------------------------------------------------------------------------------
-
-# Add "files" to .ZIP stored under "from_key" in "aws[:lambda_bucket]".
-# Store result under "to_key".
-# Implemented using Python zipfile library running on AWS Lambda
-# (to avoid downloading/uploading .ZIP to/from local machine).
-
-function create_lambda_zip(aws, to_key, from_key, files::Associative)
-
-    bucket = aws[:lambda_bucket]
-    lambda_name = "ocaws_create_lambda_zip"
-
-#    delete_lambda(aws, lambda_name)
-
-    files = [n => base64encode(v) for (n,v) in files]
-
-    @repeat 2 try
-
-        # Call lambda function to update ZIP stored in S3...
-        invoke_lambda(aws, lambda_name,
-                      @SymDict(bucket, to_key, from_key, files))
-
-    catch e
-
-        # Deploy create_lambda_zip lambda function if needed...
-        @retry if e.code == "404"
-
-            role_name = string(lambda_name, '-', aws[:region])
-
-            create_py_lambda(aws, lambda_name,
-            """
-            import boto3
-            import botocore
-            import zipfile
-
-            def main(event, context):
-
-                # Get bucket object...
-                bucket = event['bucket']
-                region = boto3.client('s3').get_bucket_location(Bucket=bucket)
-                region = region['LocationConstraint']
-                bucket = boto3.resource('s3', region_name = region).Bucket(bucket)
-
-                # Download zip file...
-                bucket.download_file(event['from_key'], '/tmp/lambda.zip')
-
-                # Patch zip file...
-                with zipfile.ZipFile('/tmp/lambda.zip', 'a') as z:
-                    for file in event['files']:
-                        info = zipfile.ZipInfo(file)
-                        info.compress_type = zipfile.ZIP_DEFLATED
-                        info.external_attr = 0777 << 16L
-                        z.writestr(info, event['files'][file].decode('base64'))
-
-                # Upload updated zip file...
-                bucket.upload_file('/tmp/lambda.zip', event['to_key'])
-            """;
-            Role = create_lambda_role(aws, role_name, """{
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Action": [
-                            "s3:GetObject",
-                            "s3:PutObject",
-                            "s3:GetBucketLocation"
-                        ],
-                        "Resource": "arn:aws:s3:::$bucket*"
-                    },
-                    {
-                        "Effect": "Allow",
-                        "Action": [
-                            "logs:CreateLogGroup",
-                            "logs:CreateLogStream",
-                            "logs:PutLogEvents"
-                        ],
-                        "Resource": "arn:aws:logs:*:*:*"
-                    }
-                ]
-            }"""))
-        end
-    end
-end
-
-
-function merge_lambda_zip(aws, to_key, from_key, new_keys)
-
-    lambda_name = "ocaws_merge_lambda_zip"
-    bucket = aws[:lambda_bucket]
-#    delete_lambda(aws, lambda_name)
-
-    @repeat 2 try
-
-        # Call lambda function to update ZIP stored in S3...
-        invoke_lambda(aws, lambda_name,
-                           @SymDict(bucket, to_key, from_key, new_keys))
-
-    catch e
-
-        # Deploy merge_lambda_zip lambda function if needed...
-        @retry if e.code == "404"
-
-            role_name = string(lambda_name, '-', aws[:region])
-
-            create_py_lambda(aws, lambda_name,
-            """
-            import os
-            import tempfile
-            import zipfile
-            import shutil
-            import subprocess
-            import boto3
-            import botocore
-
-            def main(event, context):
-
-                # Create temporary working directory...
-                tmpdir = tempfile.mkdtemp()
-                os.chdir(tmpdir)
-
-                # Get bucket object...
-                bucket = event['bucket']
-                region = boto3.client('s3').get_bucket_location(Bucket=bucket)
-                region = region['LocationConstraint']
-                bucket = boto3.resource('s3', region_name = region).Bucket(bucket)
-
-                # Download base zip file...
-                bucket.download_file(event['from_key'], 'base.zip')
-
-                # Download new zip file and merge into base zip file...
-                with zipfile.ZipFile('base.zip', 'a') as za:
-                    for key in event['new_keys']:
-                        bucket.download_file(key, 'new.zip')
-                        with zipfile.ZipFile('new.zip', 'r') as zb:
-                            for i in zb.infolist():
-                                za.writestr(i, zb.open(i.filename).read())
-
-                # Upload new zip file...
-                bucket.upload_file('base.zip', event['to_key'])
-                os.chdir("..")
-                shutil.rmtree(tmpdir)
-            """,
-            Role = create_lambda_role(aws, role_name, """{
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Effect": "Allow",
-                        "Action": [
-                            "s3:GetObject",
-                            "s3:PutObject",
-                            "s3:GetBucketLocation"
-                        ],
-                        "Resource": "arn:aws:s3:::$bucket*"
-                    },
-                    {
-                        "Effect": "Allow",
-                        "Action": [
-                            "logs:CreateLogGroup",
-                            "logs:CreateLogStream",
-                            "logs:PutLogEvents"
-                        ],
-                        "Resource": "arn:aws:logs:*:*:*"
-                    }
-                ]
-            }"""))
-        end
-    end
-end
-
-
-
 #-------------------------------------------------------------------------------
 # Julia Code Support.
 #-------------------------------------------------------------------------------
 
-# FIXME rename lambda_call to just lambda
 
-# Returns an anonymous function that call "func" in the Lambda sandbox.
+# Base64 representation of Julia objects...
+
+function serialize64(x)
+
+    buf = IOBuffer()
+    b64 = Base64EncodePipe(buf)
+    serialize(b64, x)
+    close(b64)
+    takebuf_string(buf)
+end
+
+
+# Invoke a Julia AWS Lambda function.
+# Serialise "args" and deserialise result.
+
+function invoke_jl_lambda(aws, name, args...;
+                          jl_modules=Symbol[])
+
+    r = invoke_lambda(aws, name, jl_modules = jl_modules,
+                                 jl_data = serialize64(args))
+    try
+        println(r[:stdout])
+    end
+    try
+        return deserialize(Base64DecodePipe(IOBuffer(r[:jl_data])))
+    end
+    return r
+end
+
+
+# Returns an anonymous function that calls "func" in the Lambda sandbox.
 # e.g. @lambda_call(aws, println)("Hello")
 #      @lambda_call(aws, x -> x*x)(4)
 #      @lambda_call(aws, [:JSON], s -> JSON.parse(s))("{}")
@@ -559,19 +375,46 @@ macro lambda_call(aws, args...)
     @assert isa(modules, Vector{Symbol})
 
     esc(quote
-        (args...) -> invoke_jl_lambda($aws, :jl_lambda_call,
-                                            $modules, $func, args)
+        (args...) -> invoke_jl_lambda($aws, :jl_lambda_call, $func, args;
+                                            jl_modules = $modules)
     end)
 end
 
 
+# Evaluate "expr" in the Lambda sandbox.
+
+macro lambda_eval(aws, args...)
+
+    @assert length(args) <= 2
+    expr = args[end]
+    modules = length(args) > 1 ? eval(args[1]) : Symbol[]
+    @assert isa(modules, Vector{Symbol})
+
+    esc(quote @lambda_call($aws,$modules,()->$expr)() end)
+end
+
+
+# Evaluate "code" in the Lambda sandbox.
+
+function lambda_include_string(aws, code)
+    @lambda_call(aws, include_string)(code)
+end
+
+
+# Evaluate "filename" in the Lambda sandbox.
+
+function lambda_include(aws, filename)
+    code = readstring(filename)
+    @lambda_call(aws, include_string)(code, filename)
+end
+
+
 # Create an AWS Lambda to run "jl_code".
-# The Julia runtime is copied from "aws[:lambda_bucket]/jl_lambda_base.zip".
-# "jl_code" is added to the .ZIP as "$name.jl".
-# A Python wrapper ("$name.py") is passes the .jl file to bin/julia.
 
 function create_jl_lambda(aws, name, jl_code,
                           modules=Symbol[], options=SymDict())
+
+    options = copy(options)
 
     # Find files and load path for required modules...
     load_path, mod_files = module_files(aws, modules)
@@ -590,11 +433,12 @@ function create_jl_lambda(aws, name, jl_code,
     push!(py_config, "error_sns_arn = '$error_sns_arn'\n")
 
     # Start with zipfile from options...
-    zipfile = get(options, :zipfile, UInt8[])
-    delete!(options, :zipfile)
+    if !haskey(options, :ZipFile)
+        options[:ZipFile] = UInt8[]
+    end
 
     # Add lambda source and module files to zip...
-    open_zip(zipfile) do z
+    open_zip(options[:ZipFile]) do z
         merge!(z, mod_files)
         z["lambda_config.py"] = join(py_config)
         z["module_$name.jl"] = jl_code
@@ -602,7 +446,8 @@ function create_jl_lambda(aws, name, jl_code,
 
     # FNV hash of deployed Julia code is stored in the Description field.
     old_config = lambda_configuration(aws, name)
-    new_code_hash = zipfile |> open_zip |> Dict |> serialize64 |> fnv32 |> hex
+    new_code_hash = options[:ZipFile] |> open_zip |> Dict |>
+                    serialize64 |> fnv32 |> hex
     old_code_hash = get(old_config, :Description, nothing)
 
     # Don't create a new lambda if one already exists with same code...
@@ -613,15 +458,15 @@ function create_jl_lambda(aws, name, jl_code,
     options[:Description] = new_code_hash
 
     deploy_lambda = @lambda_call(aws,
-        [:AWSLambda, :AWSIAM, :InfoZIP, :SymDict, :Retry, :JSON],
-        (aws, zipfile, name, options, old_config) -> begin
+        [:AWSLambda, :AWSS3, :InfoZIP],
+        (aws, name, options, is_new) -> begin
 
             AWSCore.set_debug_level(1)
 
             # Unzip lambda source and modules files to /tmp...
             mktempdir() do tmpdir
 
-                InfoZIP.unzip(zipfile, tmpdir)
+                InfoZIP.unzip(options[:ZipFile], tmpdir)
 
                 # Create module precompilation directory under /tmp...
                 ji_path = Base.LOAD_CACHE_PATH[1]
@@ -638,9 +483,6 @@ function create_jl_lambda(aws, name, jl_code,
 
                 run(`julia -e $precompile_cmd`)
 
-#FIXME needed?
-run(`chmod -R a+r $ji_path`)
-
                 # Create new ZIP combining base image and new files from /tmp...
                 run(`rm -f /tmp/lambda.zip`)
                 run(Cmd(`zip -q --symlinks -r -9 /tmp/lambda.zip .`,
@@ -652,93 +494,24 @@ run(`chmod -R a+r $ji_path`)
                 run(`rm -f /tmp/lambda.zip`)
             end
 
-function x_create_lambda(aws, name;
-                       ZipFile=nothing, 
-                       S3Key="$name.zip",
-                       S3Bucket=get(aws, :lambda_bucket, nothing),
-                       Handler="lambda_main.main",
-                       Role=role_arn(aws, "jl_lambda_call_lambda_role"),
-                       Runtime="python2.7",
-                       MemorySize = 1024,
-                       Timeout=300,
-                       args...)
-
-    if ZipFile != nothing
-        ZipFile = base64encode(ZipFile)
-        Code = @SymDict(ZipFile)
-    else
-        Code = @SymDict(S3Key, S3Bucket)
-    end
-
-    query = @SymDict(FunctionName = name,
-                     Code,
-                     Handler,
-                     Role,
-                     Runtime,
-                     MemorySize,
-                     Timeout,
-                     args...)
-
-    @repeat 5 try
-
-        AWSLambda.lambda(aws, "POST", query=query)
-
-    catch e
-        # Retry in case Role was just created and is not yet active...
-        @delay_retry if e.code == "400" end
-    end
-end
-
             # FIXME Upload to S3 because direct ZipFile upload to Lambda hangs...
+            #       https://github.com/JuliaWeb/Requests.jl/issues/117
             options[:S3Key] = "$name.$(options[:Description]).zip"
             s3_put(aws, aws[:lambda_bucket], options[:S3Key], options[:ZipFile])
             delete!(options, :ZipFile)
 
             # Deploy the lambda to AWS...
-            if old_config == nothing
-                r = x_create_lambda(aws, name; options...)
+            if is_new
+                r = create_lambda(aws, name; options...)
             else
                 r = update_lambda(aws, name; options...)
             end
 
             # FIXME See above
             s3_delete(aws, aws[:lambda_bucket], options[:S3Key])
-
         end)
 
-    deploy_lambda(aws, zipfile, name, options, old_config)
-end
-
-
-function serialize64(a)
-
-    buf = IOBuffer()
-    b64 = Base64EncodePipe(buf)
-    serialize(b64, a)
-    close(b64)
-    takebuf_string(buf)
-end
-
-
-function deserialize64(a)
-
-    deserialize(Base64DecodePipe(IOBuffer(a)))
-end
-
-
-# Invoke a Julia AWS Lambda function.
-# Serialise "args" and deserialise result.
-
-function invoke_jl_lambda(aws, name, args...)
-
-    r = invoke_lambda(aws, name, jl_data = serialize64(args))
-    try
-        println(r[:stdout])
-    end
-    try
-        return deserialize64(r[:jl_data])
-    end
-    return r
+    deploy_lambda(aws, name, options, old_config == nothing)
 end
 
 
@@ -842,36 +615,6 @@ macro λ(args...)
 end
 
 
-
-function lambda_include_string(aws, code)
-    @lambda_call(aws, include_string)(code)
-end
-
-
-function lambda_include(aws, filename)
-    code = readstring(filename)
-    @lambda_call(aws, include_string)(code, filename)
-end
-
-
-# Evaluate "expr" in the Lambda sandbox.
-
-macro lambda_eval(aws, expr)
-    esc(quote @lambda_call($aws,()->$expr)() end)
-end
-
-
-
-# List of modules in the Lambda sandbox ".ji" cache.
-
-function lambda_module_cache(aws)
-
-    @lambda_eval aws [symbol(splitext(f)[1]) for f in
-                        [[readdir(p) for p in
-                            filter(isdir, Base.LOAD_CACHE_PATH)]...;]]
-end
-
-
 # List of modules in local ".ji" cache.
 
 function local_module_cache()
@@ -879,6 +622,14 @@ function local_module_cache()
     [symbol(splitext(f)[1]) for f in
         [[readdir(p) for p in
             filter(isdir, Base.LOAD_CACHE_PATH)]...;]]
+end
+
+
+# List of modules in the Lambda sandbox ".ji" cache.
+
+function lambda_module_cache(aws)
+
+    @lambda_call(aws, [:AWSLambda], local_module_cache)()
 end
 
 
@@ -1023,7 +774,7 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
                 "AWSCore",
                 "AWSEC2",
                 "AWSIAM",
-                "AWSLambda",
+                ("AWSLambda", "nos3_branch"),
                 "AWSS3",
                 "AWSSNS",
                 "AWSSQS",
@@ -1043,12 +794,17 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
 
     # List of Julia packages to install...
     pkg_add_cmd = "Pkg.init(); Pkg.update(); "
-    pkg_using_cmd = "using AWSLambdaWrapper; "
+    pkg_using_cmd = "using AWSLambdaWrapper; using module_jl_lambda_call; "
     for p in pkg_list
         if isa(p, Tuple)
-            p, url = p
-            pkg_add_cmd *= "Pkg.clone(\"$url\"); "
-            pkg_add_cmd *= "Pkg.build(\"$p\"); "
+            p, x = p
+            if ismatch(r"^http", x)
+                pkg_add_cmd *= "Pkg.clone(\"$x\"); "
+                pkg_add_cmd *= "Pkg.build(\"$p\"); "
+            else
+                pkg_add_cmd *= "Pkg.add(\"$p\"); "
+                pkg_add_cmd *= "Pkg.checkout(\"$p\", \"$x\"); "
+            end
         else
             pkg_add_cmd *= "Pkg.add(\"$p\"); "
         end

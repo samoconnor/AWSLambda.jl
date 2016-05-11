@@ -20,6 +20,10 @@ using JSON
 # Run the lambda function...
 function invoke_lambda(lambda_module::Module, event)
 
+    for m in Vector{Symbol}(get(event,"jl_modules",[]))
+        eval(Main, :(using $m))
+    end
+
     open("/tmp/lambda_out", "w") do out
 
         if haskey(event, "jl_data")

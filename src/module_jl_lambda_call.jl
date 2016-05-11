@@ -9,37 +9,17 @@
 #==============================================================================#
 
 
+__precompile__()
+
+
 module module_jl_lambda_call
 
 
-using FNVHash
-using AWSCore
-using AWSEC2
-using AWSIAM
-using AWSLambda
-using AWSS3
-using AWSSNS
-using AWSSQS
-using AWSSES
-using AWSSDB
-using InfoZIP
-
-
-function lambda_function(modules::Vector{Symbol}, func, args)
-
-    for m in modules
-        eval(:(using $m))
-    end
-
-    eval(func)(args...)
-end
+lambda_function(func, args) = eval(Main, func)(args...)
 
 
 function lambda_function_with_event(event) 
-
-    lambda_function(Vector{Symbol}(get(event,"modules",[])),
-                    parse(event["func"]),
-                    event["args"])
+    lambda_function(parse(event["func"]), event["args"])
 end
 
 
