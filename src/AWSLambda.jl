@@ -815,7 +815,7 @@ macro lambda(args...)
             $body
         end
 
-        lambda_function_with_event(event) = lambda($get_args)
+        lambda_function_with_event(event) = lambda_function($get_args)
 
         end
         """
@@ -1099,6 +1099,30 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
         find='OPENBLAS_TARGET_ARCH=.*\$'
         repl='OPENBLAS_TARGET_ARCH=SANDYBRIDGE\\nMARCH=core-avx-i'
         sed s/\$find/\$repl/ < Make.inc.orig > Make.inc
+
+        # Disable precompile path check...
+        patch -p1 << EOF
+        diff --git a/base/loading.jl b/base/loading.jl
+        index 1dfe06c..ff7aef5 100644
+        --- a/base/loading.jl
+        +++ b/base/loading.jl
+        @@ -442,6 +442,7 @@ function stale_cachefile(modpath, cachefile)
+                     return true # invalid cache file
+                 end
+                 modules, files = cache_dependencies(io)
+        +#=
+                 if files[1][1] != modpath
+                     return true # cache file was compiled from a different path
+                 end
+        @@ -451,6 +452,7 @@ function stale_cachefile(modpath, cachefile)
+                         return true
+                     end
+                 end
+        +=#
+                 # files are not stale, so module list is valid and needs checking
+                 for (M,uuid) in modules
+                     if !isdefined(Main, M)
+    EOF
 
         # Build and install Julia under /var/task...
         make -j2 prefix= DESTDIR=/var/task all
