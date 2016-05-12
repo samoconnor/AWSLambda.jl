@@ -24,7 +24,7 @@ name = os.environ['AWS_LAMBDA_FUNCTION_NAME']
 root = os.environ['LAMBDA_TASK_ROOT']
 os.environ['HOME'] = '/tmp/'
 os.environ['JULIA_PKGDIR'] = root + '/julia'
-os.environ['JULIA_LOAD_PATH'] = root + ':' + root + '/julia/lib'
+os.environ['JULIA_LOAD_PATH'] = root
 os.environ['PATH'] += ':' + root + '/bin'
 
 

@@ -10,8 +10,8 @@
 #=
 TODO
 
+    FIXME Description not being updated???
  - rename @lambda_call to just @lambda ?
- - use load_path for new modules...
  - Upload to S3 because direct ZipFile upload to Lambda hangs...
 
 
@@ -418,7 +418,8 @@ function create_jl_lambda(aws, name, jl_code,
 
     # Find files and load path for required modules...
     load_path, mod_files = module_files(aws, modules)
-    py_config = ["os.environ['JULIA_LOAD_PATH'] += '$(join(load_path, ":"))'\n"]
+    full_load_path = join([":/var/task/julia/$p" for p in load_path])
+    py_config = ["os.environ['JULIA_LOAD_PATH'] += '$full_load_path'\n"]
 
     # Get env vars from "aws" or "options"...
     env = get(options, :env,
@@ -459,7 +460,7 @@ function create_jl_lambda(aws, name, jl_code,
 
     deploy_lambda = @lambda_call(aws,
         [:AWSLambda, :AWSS3, :InfoZIP],
-        (aws, name, options, is_new) -> begin
+        (aws, name, load_path, options, is_new) -> begin
 
             AWSCore.set_debug_level(1)
 
@@ -473,15 +474,16 @@ function create_jl_lambda(aws, name, jl_code,
                 ji_path = replace(ji_path, "/var/task", tmpdir, 1)
                 mkpath(ji_path)
 
-                # FIXME use load_path for new modules...
-
-                precompile_cmd = """
-                    insert!(LOAD_PATH, 1, "$tmpdir")
-                    insert!(Base.LOAD_CACHE_PATH, 1, "$ji_path")
-                    using module_$name
-                    """
-
-                run(`julia -e $precompile_cmd`)
+                # Run precompilation...
+                cmd = "push!(LOAD_PATH, \"$tmpdir\")\n"
+                for p in load_path
+                    cmd *= "push!(LOAD_PATH, \"$tmpdir/julia/$p\")\n"
+                end
+                cmd *= "insert!(Base.LOAD_CACHE_PATH, 1, \"$ji_path\")\n"
+                cmd *= "using module_$name\n"
+                println(cmd)
+                run(`julia -e $cmd`)
+                run(`chmod -R a+r $ji_path`)
 
                 # Create new ZIP combining base image and new files from /tmp...
                 run(`rm -f /tmp/lambda.zip`)
@@ -511,7 +513,7 @@ function create_jl_lambda(aws, name, jl_code,
             s3_delete(aws, aws[:lambda_bucket], options[:S3Key])
         end)
 
-    deploy_lambda(aws, name, options, old_config == nothing)
+    deploy_lambda(aws, name, load_path, options, old_config == nothing)
 end
 
 
@@ -601,6 +603,8 @@ macro lambda(args...)
 
     modules = Symbol[m.args[1] for m in modules.args]
 
+    call.args[1] = name
+
     quote
         create_jl_lambda($(esc(aws)),
                          $(string(name)), $jl_code, $modules, $options)
@@ -629,7 +633,7 @@ end
 
 function lambda_module_cache(aws)
 
-    @lambda_call(aws, [:AWSLambda], local_module_cache)()
+    @lambda_call(aws, [:AWSLambda], AWSLambda.local_module_cache)()
 end
 
 
@@ -704,18 +708,20 @@ function module_files(aws, modules::Vector{Symbol})
 
     # Build a dict of files for each load path location...
     d = Dict()
+    add_file = (p,f) -> (if !haskey(d, p); d[p] = [] end; push!(d[p], f))
     for file in precompiled_module_files(aws, modules)
         file = realpath(file)
 
-        for p in filter(isdir, [LOAD_PATH...; pkgd])
+        if startswith(file, pkgd)
+            add_file(pkgd, file[length(pkgd)+2:end])
+            continue
+        end
+
+        for p in filter(isdir, LOAD_PATH)
             p = realpath(abspath(p))
-            if startswith(file, p)
-                file = file[length(p)+2:end]
-                if !haskey(d, p)
-                    d[p] = [file]
-                else
-                    push!(d[p], file)
-                end
+            if joinpath(p, basename(file)) == file
+                add_file(p, basename(file))
+                break
             end
         end
     end
@@ -730,9 +736,10 @@ function module_files(aws, modules::Vector{Symbol})
 
     # Build archive of file content...
     archive = OrderedDict()
-    for (p, s) in zip([load_path...; pkgd], [short_load_path...; "julia"])
+    for (p, s) in zip([load_path...; pkgd],
+                      [short_load_path...; basename(pkgd)])
         for f in get(d,p,[])
-            archive[joinpath(s, f)] = read(joinpath(p, f))
+            archive[joinpath("julia", s, f)] = read(joinpath(p, f))
         end
     end
 
