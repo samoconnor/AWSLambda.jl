@@ -814,7 +814,7 @@ macro lambda(args...)
 
             # When end of input is found, call main()...
             if length(buf) >  1 && buf[end-1:end] == ['\\0','\\n']
-                input = JSON.parse(UTF8String(buf))
+                input = JSON.parse(UTF8String(buf[1:end-2]))
                 main(input["event"], input["context"])
                 empty!(buf)
             end
