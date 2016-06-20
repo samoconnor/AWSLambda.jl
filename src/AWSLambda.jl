@@ -118,7 +118,7 @@ function create_lambda(aws, name;
                        S3Key="$name.zip",
                        S3Bucket=get(aws, :lambda_bucket, nothing),
                        Handler="lambda_main.main",
-                       Role=role_arn(aws, "jl_lambda_call_lambda_role"),
+                       Role=role_arn(aws, "jl_lambda_eval_lambda_role"),
                        Runtime="python2.7",
                        MemorySize = 1024,
                        Timeout=300,
@@ -164,13 +164,10 @@ function update_lambda(aws, name;
         query = @SymDict(S3Key, S3Bucket)
     end
 
-    @sync begin
+    lambda(aws, "PUT", path="$name/code", query=query)
 
-        @async lambda(aws, "PUT", path="$name/code", query=query)
-
-        @async if !isempty(args)
-            lambda(aws, "PUT", path="$name/configuration", query=@SymDict(args...))
-        end
+    if !isempty(args)
+        lambda(aws, "PUT", path="$name/configuration", query=@SymDict(args...))
     end
 end
 
@@ -375,7 +372,7 @@ macro lambda_call(aws, args...)
     @assert isa(modules, Vector{Symbol})
 
     esc(quote
-        (args...) -> invoke_jl_lambda($aws, :jl_lambda_call, $func, args;
+        (args...) -> invoke_jl_lambda($aws, :jl_lambda_eval, $func, args;
                                             jl_modules = $modules)
     end)
 end
@@ -421,6 +418,13 @@ function create_jl_lambda(aws, name, jl_code,
     full_load_path = join([":/var/task/julia/$p" for p in load_path])
     py_config = ["os.environ['JULIA_LOAD_PATH'] += '$full_load_path'\n"]
 
+    if AWSCore.debug_level > 0
+        println("create_jl_lambda($name)")
+        for f in keys(mod_files)
+            println("    $f")
+        end
+    end
+
     # Get env vars from "aws" or "options"...
     env = get(options, :env,
           get(aws, :lambda_env, Dict()))
@@ -436,6 +440,10 @@ function create_jl_lambda(aws, name, jl_code,
     # Start with zipfile from options...
     if !haskey(options, :ZipFile)
         options[:ZipFile] = UInt8[]
+    end
+
+    if AWSCore.debug_level > 0
+        @show py_config
     end
 
     # Add lambda source and module files to zip...
@@ -468,6 +476,7 @@ function create_jl_lambda(aws, name, jl_code,
             mktempdir() do tmpdir
 
                 InfoZIP.unzip(options[:ZipFile], tmpdir)
+                run(`ls -la / $tmpdir`)
 
                 # Create module precompilation directory under /tmp...
                 ji_path = Base.LOAD_CACHE_PATH[1]
@@ -476,6 +485,8 @@ function create_jl_lambda(aws, name, jl_code,
 
                 # Run precompilation...
                 cmd = "push!(LOAD_PATH, \"$tmpdir\")\n"
+                v = "v$(VERSION.major).$(VERSION.minor)"
+                cmd *= "push!(LOAD_PATH, \"$tmpdir/julia/$v\")\n"
                 for p in load_path
                     cmd *= "push!(LOAD_PATH, \"$tmpdir/julia/$p\")\n"
                 end
@@ -500,6 +511,7 @@ function create_jl_lambda(aws, name, jl_code,
             #       https://github.com/JuliaWeb/Requests.jl/issues/117
             options[:S3Key] = "$name.$(options[:Description]).zip"
             s3_put(aws, aws[:lambda_bucket], options[:S3Key], options[:ZipFile])
+
             delete!(options, :ZipFile)
 
             # Deploy the lambda to AWS...
@@ -619,13 +631,17 @@ macro λ(args...)
 end
 
 
-# List of modules in local ".ji" cache.
-
 function local_module_cache()
 
-    [symbol(splitext(f)[1]) for f in
-        [[readdir(p) for p in
-            filter(isdir, Base.LOAD_CACHE_PATH)]...;]]
+    # List of modules in local ".ji" cache.
+    r = [symbol(splitext(f)[1]) for f in
+            [[readdir(p) for p in
+                filter(isdir, Base.LOAD_CACHE_PATH)]...;]]
+
+    # List of modules compiled in to sys image.
+    append!(r, filter(x->eval(:(isa($x, Module))), names(Main)))
+
+    return unique(r)
 end
 
 
@@ -758,8 +774,8 @@ end
 
 function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
 
-    # Role assumed by basic "jl_lambda_call" lambda function...
-    role = create_lambda_role(aws, "jl_lambda_call")
+    # Role assumed by basic "jl_lambda_eval" lambda function...
+    role = create_lambda_role(aws, "jl_lambda_eval")
 
     # List of Amazon Linux packages to install...
     yum_list = ["git",
@@ -777,16 +793,19 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
     # Default Julia packages...
     pkg_list = ["Compat",
                 "FNVHash",
-                "InfoZIP",
+                ("InfoZIP", "master"),
+                "DataFrames",
+                "DSP",
+                "Requests",
                 "AWSCore",
                 "AWSEC2",
                 "AWSIAM",
-                ("AWSLambda", "nos3_branch"),
                 "AWSS3",
                 "AWSSNS",
                 "AWSSQS",
                 "AWSSES",
-                "AWSSDB"]
+                "AWSSDB",
+                ("AWSLambda", "nos3_branch")]
 
     for p in get(aws, :lambda_packages, [])
         if !(p in pkg_list)
@@ -801,7 +820,7 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
 
     # List of Julia packages to install...
     pkg_add_cmd = "Pkg.init(); Pkg.update(); "
-    pkg_using_cmd = "using AWSLambdaWrapper; using module_jl_lambda_call; "
+    pkg_using_cmd = "using AWSLambdaWrapper; using module_jl_lambda_eval; "
     for p in pkg_list
         if isa(p, Tuple)
             p, x = p
@@ -822,7 +841,7 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
     zip = ["lambda_main.py",
            "lambda_config.py",
            "AWSLambdaWrapper.jl",
-           "module_jl_lambda_call.jl"]
+           "module_jl_lambda_eval.jl"]
     zip = [f => read(joinpath(dirname(@__FILE__), f)) for f in zip]
     zip = base64encode(create_zip(zip))
 
@@ -908,7 +927,17 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
     echo $zip | base64 -d > /tmp/jl.zip && unzip -d /var/task /tmp/jl.zip
 
     # Precompile modules...
-    JULIA_LOAD_PATH=/var/task /var/task/bin/julia -e '$pkg_using_cmd'
+    #JULIA_LOAD_PATH=/var/task /var/task/bin/julia -e '$pkg_using_cmd'
+
+    # FIXME userimg experiment....
+    echo '$pkg_using_cmd' > /tmp/userimg.jl
+    cp /var/task/AWSLambdaWrapper.jl \\
+       /var/task/module_jl_lambda_eval.jl \\
+       /var/task/julia/v*
+    HAVE_INFOZIP=1 \\
+    /var/task/bin/julia /var/task/share/julia/build_sysimg.jl \\
+                        /tmp/sys native /tmp/userimg.jl
+    mv -f /tmp/sys.so /var/task/lib/julia/
 
     # Copy minimal set of files to /task-staging...
     mkdir -p /task-staging/bin
@@ -953,12 +982,12 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
 
     # Delete Lambda function...
     aws --region us-east-1 \\
-        lambda delete-function --function-name "jl_lambda_call" || true
+        lambda delete-function --function-name "jl_lambda_eval" || true
 
     # Create Lambda function...
     aws --region $(aws[:region]) \\
         lambda create-function \\
-            --function-name "jl_lambda_call" \\
+            --function-name "jl_lambda_eval" \\
             --runtime "python2.7" \\
             --role "$role" \\
             --timeout 300 \\

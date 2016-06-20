@@ -36,14 +36,14 @@ execfile('lambda_config.py')
 julia_proc = None
 def start_julia():
     global julia_proc
-    julia_proc = subprocess.Popen(
-        [root + '/bin/julia', '-i', '-e',
-         'using module_' + name + '; '                                         \
-       + 'using AWSLambdaWrapper; '                                            \
-       + 'AWSLambdaWrapper.main(module_' + name + ');'],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT)
+    cmd = [root + '/bin/julia', '-i', '-e',
+           'using module_' + name + '; '                                       \
+         + 'using AWSLambdaWrapper; '                                          \
+         + 'AWSLambdaWrapper.main(module_' + name + ');']
+    print(' '.join(cmd))
+    julia_proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
+                                       stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT)
 
 
 # Pass event and context to Julia as JSON with null,newline terminator...

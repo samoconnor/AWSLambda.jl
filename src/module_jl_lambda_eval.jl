@@ -1,5 +1,5 @@
 #==============================================================================#
-# module_jl_lambda_call.jl
+# module_jl_lambda_eval.jl
 #
 # Default AWS Lambda function for Julia.
 #
@@ -12,7 +12,7 @@
 __precompile__()
 
 
-module module_jl_lambda_call
+module module_jl_lambda_eval
 
 
 lambda_function(func, args) = eval(Main, func)(args...)

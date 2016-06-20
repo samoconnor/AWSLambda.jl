@@ -20,7 +20,10 @@ using JSON
 # Run the lambda function...
 function invoke_lambda(lambda_module::Module, event)
 
+    println("AWSLambdaWrapper.invoke_lambda($lambda_module, event)...")
+
     for m in Vector{Symbol}(get(event,"jl_modules",[]))
+        println("    using $m...")
         eval(Main, :(using $m))
     end
 
@@ -28,12 +31,17 @@ function invoke_lambda(lambda_module::Module, event)
 
         if haskey(event, "jl_data")
 
+            println("$lambda_module.lambda_function()...")
+
             args = deserialize(Base64DecodePipe(IOBuffer(event["jl_data"])))
             b64_out = Base64EncodePipe(out)
             serialize(b64_out, lambda_module.lambda_function(args...))
             close(b64_out)
 
         else 
+
+            println("$lambda_module.lambda_function_with_event()...")
+
             JSON.print(out, lambda_module.lambda_function_with_event(event))
         end
     end
@@ -42,6 +50,8 @@ end
 
 
 function main(lambda_module::Module)
+
+    println("AWSLambdaWrapper.main($lambda_module)...")
 
     # Read from STDIN into buf...
     buf = UInt8[]
@@ -53,7 +63,7 @@ function main(lambda_module::Module)
         # Wait for end of input..., then call invoke_lambda()...
         if length(buf) >  1 && buf[end-1:end] == ['\0','\n']
 
-            input = JSON.parse(UTF8String(buf))
+            input = JSON.parse(UTF8String(buf[1:end-2]))
             empty!(buf)
 
             global AWS_LAMBDA_CONTEXT = input["context"]
