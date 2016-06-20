@@ -639,7 +639,7 @@ function local_module_cache()
                 filter(isdir, Base.LOAD_CACHE_PATH)]...;]]
 
     # List of modules compiled in to sys image.
-    append!(r, filter(x->eval(:(isa($x, Module))), names(Main)))
+    append!(r, filter(x->Main.eval(:(isa($x, Module))), names(Main)))
 
     return unique(r)
 end
@@ -797,7 +797,7 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
                 "DataFrames",
                 "DSP",
                 "Requests",
-                "AWSCore",
+                ("AWSCore", "master"),
                 "AWSEC2",
                 "AWSIAM",
                 "AWSS3",
@@ -913,8 +913,7 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
         # Save tarball of raw Julia build...
         cd /
         tar czfP jl_lambda_base.tgz var/task
-        aws --region $(aws[:region]) \\
-            s3 cp /jl_lambda_base.tgz \\
+        aws s3 cp /jl_lambda_base.tgz \\
                   s3://$(aws[:lambda_bucket])/jl_lambda_base.tgz
     fi
 
@@ -981,12 +980,10 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
     zip -u --symlinks -r -9 /jl_lambda_base.zip *
 
     # Delete Lambda function...
-    aws --region us-east-1 \\
-        lambda delete-function --function-name "jl_lambda_eval" || true
+    aws lambda delete-function --function-name "jl_lambda_eval" || true
 
     # Create Lambda function...
-    aws --region $(aws[:region]) \\
-        lambda create-function \\
+    aws lambda create-function \\
             --function-name "jl_lambda_eval" \\
             --runtime "python2.7" \\
             --role "$role" \\
