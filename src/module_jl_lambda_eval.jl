@@ -18,7 +18,7 @@ module module_jl_lambda_eval
 lambda_function(func, args) = eval(Main, func)(args...)
 
 
-function lambda_function_with_event(event) 
+function lambda_function_with_event(event::Dict{UTF8String, Any})
     lambda_function(parse(event["func"]), event["args"])
 end
 

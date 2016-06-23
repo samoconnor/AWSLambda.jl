@@ -582,7 +582,8 @@ macro lambda(args...)
     args = call.args[2:end]
 
     # Split "using module" lines out of body...
-    modules = Expr(:block, filter(e->isa(e, Expr) && e.head == :using, body.args)...)
+    modules = filter(e->isa(e, Expr) && e.head == :using, body.args)
+    modules = Symbol[m.args[1] for m in modules]
     body.args = filter(e->!isa(e, Expr) || e.head != :using, body.args)
 
     # Generate code to extract args from event Dict...
@@ -596,13 +597,15 @@ macro lambda(args...)
 
         module module_$name
 
-        $modules
+        $(join(["using $m" for m in modules], "\n"))
 
         function $call
             $body
         end
 
-        lambda_function_with_event(event) = lambda_function($get_args)
+        function lambda_function_with_event(event::Dict{UTF8String,Any})
+            lambda_function($get_args)
+        end
 
         end
         """
@@ -613,7 +616,6 @@ macro lambda(args...)
     # Replace function body with Lambda invocation...
     f.args[2] = :(invoke_jl_lambda(aws, $name, $(args...)))
 
-    modules = Symbol[m.args[1] for m in modules.args]
 
     call.args[1] = name
 
@@ -657,11 +659,11 @@ end
 
 function precompiled_module_files(aws, modules::Vector{Symbol})
 
-    ex = [lambda_module_cache(aws)..., :Main, :Base, :Core]
+    exclude = lambda_module_cache(aws)
 
-    modules = collect(filter(m->!(m in ex), modules))
+    modules = collect(filter(m->!(m in exclude), modules))
 
-    return unique([[_precompiled_module_files(i, ex) for i in modules]...;])
+    return unique([[_precompiled_module_files(i, exclude) for i in modules]...;])
 end
 
 
@@ -799,9 +801,9 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
                 "Requests",
                 ("AWSCore", "master"),
                 "AWSEC2",
-                "AWSIAM",
-                "AWSS3",
-                "AWSSNS",
+                ("AWSIAM", "master"),
+                ("AWSS3", "master"),
+                ("AWSSNS", "master"),
                 "AWSSQS",
                 "AWSSES",
                 "AWSSDB",
@@ -937,6 +939,7 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
     /var/task/bin/julia /var/task/share/julia/build_sysimg.jl \\
                         /tmp/sys native /tmp/userimg.jl
     mv -f /tmp/sys.so /var/task/lib/julia/
+    rm -f /var/task/julia/lib/v*/*.ji
 
     # Copy minimal set of files to /task-staging...
     mkdir -p /task-staging/bin

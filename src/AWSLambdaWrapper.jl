@@ -18,7 +18,7 @@ using JSON
 
 
 # Run the lambda function...
-function invoke_lambda(lambda_module::Module, event)
+function invoke_lambda(lambda_module::Module, event::Dict{UTF8String,Any})
 
     println("AWSLambdaWrapper.invoke_lambda($lambda_module, event)...")
 
@@ -38,7 +38,7 @@ function invoke_lambda(lambda_module::Module, event)
             serialize(b64_out, lambda_module.lambda_function(args...))
             close(b64_out)
 
-        else 
+        else
 
             println("$lambda_module.lambda_function_with_event()...")
 
@@ -63,12 +63,15 @@ function main(lambda_module::Module)
         # Wait for end of input..., then call invoke_lambda()...
         if length(buf) >  1 && buf[end-1:end] == ['\0','\n']
 
-            input = JSON.parse(UTF8String(buf[1:end-2]))
+            input = JSON.parse(UTF8String(buf[1:end-2]),
+                               dicttype=Dict{UTF8String,Any})
+            input::Dict{UTF8String,Any}
+
             empty!(buf)
 
             global AWS_LAMBDA_CONTEXT = input["context"]
             invoke_lambda(lambda_module, input["event"])
-            
+
             # Signal end of output on STDOUT...
             write(STDOUT, "\0\n")
         end
