@@ -6,17 +6,6 @@
 # See http://docs.aws.amazon.com/lambda/latest/dg/API_Reference.html
 #
 # Copyright Sam O'Connor 2014 - All rights reserved
-
-#=
-TODO
-
-    FIXME Description not being updated???
- - rename @lambda_call to just @lambda ?
- - Upload to S3 because direct ZipFile upload to Lambda hangs...
-
-
-=#
-
 #==============================================================================#
 
 
@@ -29,6 +18,7 @@ module AWSLambda
 export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        async_lambda, create_jl_lambda, invoke_jl_lambda, create_lambda_role,
        @λ, @lambda,
+       create_py_lambda,
        lambda_compilecache,
        create_jl_lambda_base, merge_lambda_zip,
        lambda_configuration,
@@ -63,7 +53,7 @@ using Compat.read
 #-------------------------------------------------------------------------------
 
 
-function lambda(aws::SymbolDict, verb; path="", query="", headers = Dict())
+function lambda(aws::AWSConfig, verb; path="", query="", headers = Dict())
 
     resource = "/2015-03-31/functions/$path"
 
@@ -87,10 +77,11 @@ function lambda(aws::SymbolDict, verb; path="", query="", headers = Dict())
 end
 
 
-list_lambdas(aws) = [SymbolDict(f) for f in lambda(aws, "GET")[:Functions]]
+list_lambdas(aws::AWSConfig) = [SymbolDict(f)
+                                for f in lambda(aws, "GET")[:Functions]]
 
 
-function lambda_configuration(aws, name)
+function lambda_configuration(aws::AWSConfig, name)
 
     @protected try
 
@@ -104,16 +95,16 @@ function lambda_configuration(aws, name)
 end
 
 
-function lambda_update_configuration(aws, name, options)
+function lambda_update_configuration(aws::AWSConfig, name, options)
 
     lambda(aws, "PUT", path="$name/configuration", query=options)
 end
 
 
-lambda_exists(aws, name) = lambda_configuration(aws, name) != nothing
+lambda_exists(aws::AWSConfig, name) = lambda_configuration(aws, name) != nothing
 
 
-function create_lambda(aws, name;
+function create_lambda(aws::AWSConfig, name;
                        ZipFile=nothing,
                        S3Key="$name.zip",
                        S3Bucket=get(aws, :lambda_bucket, nothing),
@@ -151,7 +142,7 @@ function create_lambda(aws, name;
 end
 
 
-function update_lambda(aws, name;
+function update_lambda(aws::AWSConfig, name;
                        ZipFile=nothing,
                        S3Key="$name.zip",
                        S3Bucket=get(aws, :lambda_bucket, nothing),
@@ -172,7 +163,7 @@ function update_lambda(aws, name;
 end
 
 
-function lambda_publish_version(aws, name, alias)
+function lambda_publish_version(aws::AWSConfig, name, alias)
 
     r = lambda(aws, "POST", path="$name/versions")
     @protected try
@@ -185,21 +176,23 @@ function lambda_publish_version(aws, name, alias)
 end
 
 
-function lambda_create_alias(aws, name, alias; FunctionVersion="\$LATEST")
+function lambda_create_alias(aws::AWSConfig, name, alias;
+                             FunctionVersion="\$LATEST")
 
     lambda(aws, "POST", path="$name/aliases",
                         query=@SymDict(FunctionVersion, Name=alias))
 end
 
 
-function lambda_update_alias(aws, name, alias; FunctionVersion="\$LATEST")
+function lambda_update_alias(aws::AWSConfig, name, alias;
+                             FunctionVersion="\$LATEST")
 
     lambda(aws, "PUT", path="$name/aliases/$alias",
                        query=@SymDict(FunctionVersion))
 end
 
 
-function delete_lambda(aws, name)
+function delete_lambda(aws::AWSConfig, name)
 
     @protected try
         lambda(aws, "DELETE", path=name)
@@ -224,7 +217,7 @@ function Base.show(io::IO, e::AWSLambdaException)
 end
 
 
-function invoke_lambda(aws, name, args; async=false)
+function invoke_lambda(aws::AWSConfig, name, args; async=false)
 
 
     @protected try
@@ -253,13 +246,17 @@ function invoke_lambda(aws, name, args; async=false)
 end
 
 
-invoke_lambda(aws, name; args...) = invoke_lambda(aws, name, SymbolDict(args))
+function invoke_lambda(aws::AWSConfig, name; args...)
+    return invoke_lambda(aws, name, SymbolDict(args))
+end
 
 
-async_lambda(aws, name, args) = invoke_lambda(aws, name, args; async=true)
+function async_lambda(aws::AWSConfig, name, args)
+    return invoke_lambda(aws, name, args; async=true)
+end
 
 
-function create_lambda_role(aws, name, policy="")
+function create_lambda_role(aws::AWSConfig, name, policy="")
 
     name = "$(name)_lambda_role"
 
@@ -283,27 +280,17 @@ function create_lambda_role(aws, name, policy="")
         @ignore if e.code == "EntityAlreadyExists" end
     end
 
-    if policy == ""
-        policy = """{
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Action": [
-                        "logs:CreateLogGroup",
-                        "logs:CreateLogStream",
-                        "logs:PutLogEvents"
-                    ],
-                    "Resource": "arn:aws:logs:*:*:*"
-                }
-            ]
-        }"""
-    end
-
-    AWSIAM.iam(aws, Action = "PutRolePolicy",
+    AWSIAM.iam(aws, Action = "AttachRolePolicy",
                     RoleName = name,
-                    PolicyName = name,
-                    PolicyDocument = policy)
+                    PolicyArn = "arn:aws:iam::aws:policy" *
+                                "/service-role/AWSLambdaBasicExecutionRole")
+
+    if policy != ""
+        AWSIAM.iam(aws, Action = "PutRolePolicy",
+                        RoleName = name,
+                        PolicyName = name,
+                        PolicyDocument = policy)
+    end
 
     return role_arn(aws, name)
 end
@@ -314,13 +301,18 @@ end
 #-------------------------------------------------------------------------------
 
 
-function create_py_lambda(aws, name, py_code;
+function create_py_lambda(aws::AWSConfig, name, py_code;
                           Role = create_lambda_role(aws, name))
 
-    delete_lambda(aws, name)
+    options = @SymDict(Role, ZipFile = create_zip("lambda_main.py" => py_code))
 
-    create_lambda(aws, name, ZipFile = create_zip("lambda_main.py" => py_code),
-                             Role = Role)
+    old_config = lambda_configuration(aws, name)
+
+    if old_config == nothing
+        create_lambda(aws, name; options...)
+    else
+        update_lambda(aws, name; options...)
+    end
 end
 
 
@@ -344,7 +336,7 @@ end
 # Invoke a Julia AWS Lambda function.
 # Serialise "args" and deserialise result.
 
-function invoke_jl_lambda(aws, name, args...;
+function invoke_jl_lambda(aws::AWSConfig, name, args...;
                           jl_modules=Symbol[])
 
     r = invoke_lambda(aws, name, jl_modules = jl_modules,
@@ -393,14 +385,14 @@ end
 
 # Evaluate "code" in the Lambda sandbox.
 
-function lambda_include_string(aws, code)
+function lambda_include_string(aws::AWSConfig, code)
     @lambda_call(aws, include_string)(code)
 end
 
 
 # Evaluate "filename" in the Lambda sandbox.
 
-function lambda_include(aws, filename)
+function lambda_include(aws::AWSConfig, filename)
     code = readstring(filename)
     @lambda_call(aws, include_string)(code, filename)
 end
@@ -408,7 +400,7 @@ end
 
 # Create an AWS Lambda to run "jl_code".
 
-function create_jl_lambda(aws, name, jl_code,
+function create_jl_lambda(aws::AWSConfig, name, jl_code,
                           modules=Symbol[], options=SymDict())
 
     options = copy(options)
@@ -588,7 +580,7 @@ macro lambda(args...)
 
     # Generate code to extract args from event Dict...
     arg_names = [isa(a, Expr) ? a.args[1] : a for a in args]
-    get_args = join(["""get(event,"$a",nothing)""" for a in arg_names], ", ")
+    get_args = join(["""event["$a"]""" for a in arg_names], ", ")
 
     body = clean_ex(body)
 
@@ -641,7 +633,13 @@ function local_module_cache()
                 filter(isdir, Base.LOAD_CACHE_PATH)]...;]]
 
     # List of modules compiled in to sys image.
-    append!(r, filter(x->Main.eval(:(isa($x, Module))), names(Main)))
+    append!(r, filter(x->Main.eval(:(try isa($x, Module)
+                                     catch ex
+                                         if typeof(ex) != UndefVarError
+                                            rethrow(ex)
+                                         end
+                                         false
+                                     end)), names(Main)))
 
     return unique(r)
 end
@@ -649,7 +647,7 @@ end
 
 # List of modules in the Lambda sandbox ".ji" cache.
 
-function lambda_module_cache(aws)
+function lambda_module_cache(aws::AWSConfig)
 
     @lambda_call(aws, [:AWSLambda], AWSLambda.local_module_cache)()
 end
@@ -657,7 +655,7 @@ end
 
 # List of source files required by "modules".
 
-function precompiled_module_files(aws, modules::Vector{Symbol})
+function precompiled_module_files(aws::AWSConfig, modules::Vector{Symbol})
 
     exclude = lambda_module_cache(aws)
 
@@ -716,7 +714,7 @@ end
 
 # Find load path and source files for "modules"...
 
-function module_files(aws, modules::Vector{Symbol})
+function module_files(aws::AWSConfig, modules::Vector{Symbol})
 
     if length(modules) == 0
         return [], OrderedDict()
@@ -774,7 +772,8 @@ end
 # Takes about 1 hour, (or about 5 minutes if full rebuild is not done).
 # Upload the Julia runtime to "aws[:lambda_bucket]/jl_lambda_base.zip".
 
-function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
+function create_jl_lambda_base(aws::AWSConfig;
+                               release = "v0.4.5", ssh_key=nothing)
 
     # Role assumed by basic "jl_lambda_eval" lambda function...
     role = create_lambda_role(aws, "jl_lambda_eval")
@@ -806,7 +805,7 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
                 ("AWSSNS", "master"),
                 "AWSSQS",
                 "AWSSES",
-                "AWSSDB",
+                ("AWSSDB", "master"),
                 ("AWSLambda", "nos3_branch")]
 
     for p in get(aws, :lambda_packages, [])
@@ -844,13 +843,25 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
            "lambda_config.py",
            "AWSLambdaWrapper.jl",
            "module_jl_lambda_eval.jl"]
-    zip = [f => read(joinpath(dirname(@__FILE__), f)) for f in zip]
+    zip = Dict(Pair[f => read(joinpath(dirname(@__FILE__), f)) for f in zip])
     zip = base64encode(create_zip(zip))
 
 
     # FIXME
     # consider downloading base tarball from here:
     # https://github.com/samoconnor/AWSLambda.jl/releases/download/v0.0.10/jl_lambda_base.tgz
+
+    if aws[:region] == "ap-southeast-2"
+        # ap-southeast-2: Intel(R) Xeon(R) CPU E5-2666 v3 @ 2.90GHz
+        arch = "HASWELL"
+        march = "core-avx2"
+        instance_type = "c4.large"
+    else
+        # ap-northeast-1: Intel(R) Xeon(R) CPU E5-2680 v2 @ 2.80GHz
+        arch = "SANDYBRIDGE"
+        march = "core-avx-i"
+        instance_type = "c3.large"
+    end
 
     bash_script = [
 
@@ -878,10 +889,11 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
         cd julia
         git checkout $release
 
-        # Configure Julia for the Xeon E5-2680 CPU used by AWS Lambda...
+
+        # Configure Julia for the CPU used by AWS Lambda...
         cp Make.inc Make.inc.orig
         find='OPENBLAS_TARGET_ARCH=.*\$'
-        repl='OPENBLAS_TARGET_ARCH=SANDYBRIDGE\\nMARCH=core-avx-i'
+        repl='OPENBLAS_TARGET_ARCH=$arch\\nMARCH=$march'
         sed s/\$find/\$repl/ < Make.inc.orig > Make.inc
 
         # Disable precompile path check...
@@ -1002,6 +1014,8 @@ function create_jl_lambda_base(aws; release = "v0.4.5", ssh_key=nothing)
 
         instance_name = "ocaws_jl_lambda_build_server",
 
+        instance_type = instance_type,
+
         image = "amzn-ami-hvm-2015.09.1.x86_64-gp2",
 
         ssh_key = ssh_key,
@@ -1038,12 +1052,12 @@ end
 hallink(hal, name) = hal["_links"][name]["href"]
 
 
-function apigateway(aws::SymbolDict, verb, resource; args...)
-    apigateway(aws, verb, resource, Dict(args))
-end
+#function apigateway(aws::AWSConfig, verb, resource; args...)
+#    apigateway(aws, verb, resource, Dict(args))
+#end
 
 
-function apigateway(aws::SymbolDict, verb, resource="/restapis", query=Dict())
+function apigateway(aws::AWSConfig, verb, resource="/restapis", query=Dict())
 
     r = @SymDict(
         service  = "apigateway",
@@ -1061,7 +1075,7 @@ function apigateway(aws::SymbolDict, verb, resource="/restapis", query=Dict())
 end
 
 
-function apigateway_restapis(aws)
+function apigateway_restapis(aws::AWSConfig)
     r = apigateway(aws, "GET", "/restapis")
     if haskey(r, "_embedded")
         r = r["_embedded"]
@@ -1076,20 +1090,20 @@ function apigateway_restapis(aws)
 end
 
 
-function apigateway_lambda_arn(aws, name)
+function apigateway_lambda_arn(aws::AWSConfig, name)
     name = arn(aws, "lambda", "function:$name")
     f = "/2015-03-31/functions/$name/invocations"
     "arn:aws:apigateway:$(aws[:region]):lambda:path$f"
 end
 
 
-function apigateway_create(aws, name, args)
+function apigateway_create(aws::AWSConfig, name, args)
 
     lambda_arn = apigateway_lambda_arn(aws, name)
     api = apigateway(aws, "POST", "/restapis", name = name)
     id = api["id"]
     method = "$(hallink(api, "resource:create"))/methods/GET"
-    params = Dict(["method.request.querystring.$a" => false for a in args])
+    params = Dict(Pair["method.request.querystring.$a" => false for a in args])
     map = "{\n$(join(["\"$a\" : \$input.params(\"$a\")" for a in args], ",\n"))\n}"
 
     apigateway(aws, "PUT", method,

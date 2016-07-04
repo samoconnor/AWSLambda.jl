@@ -58,7 +58,6 @@ function main(lambda_module::Module)
     while true
         chunk = readavailable(STDIN)
         append!(buf, chunk)
-        @assert length(chunk) > 0
 
         # Wait for end of input..., then call invoke_lambda()...
         if length(buf) >  1 && buf[end-1:end] == ['\0','\n']
