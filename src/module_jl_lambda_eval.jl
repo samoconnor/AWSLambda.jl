@@ -15,6 +15,9 @@ __precompile__()
 module module_jl_lambda_eval
 
 
+using Compat.UTF8String
+
+
 lambda_function(func, args) = eval(Main, func)(args...)
 
 

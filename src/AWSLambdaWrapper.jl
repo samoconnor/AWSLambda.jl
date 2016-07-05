@@ -14,6 +14,10 @@ __precompile__()
 
 module AWSLambdaWrapper
 
+
+using Compat.UTF8String
+
+
 using JSON
 
 
@@ -64,7 +68,6 @@ function main(lambda_module::Module)
 
             input = JSON.parse(UTF8String(buf[1:end-2]),
                                dicttype=Dict{UTF8String,Any})
-            input::Dict{UTF8String,Any}
 
             empty!(buf)
 

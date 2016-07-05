@@ -17,7 +17,8 @@ module AWSLambda
 
 export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        async_lambda, create_jl_lambda, invoke_jl_lambda, create_lambda_role,
-       @λ, @lambda,
+       @λ, @lambda, lambda_add_permission, lambda_get_permissions,
+       lambda_delete_permission, lambda_delete_permissions,
        create_py_lambda,
        lambda_compilecache,
        create_jl_lambda_base, merge_lambda_zip,
@@ -46,6 +47,8 @@ import Nettle: hexdigest
 # For compatibility with Julia 0.4
 using Compat.readstring
 using Compat.read
+using Compat.String
+using Compat.UTF8String
 
 
 #-------------------------------------------------------------------------------
@@ -192,6 +195,38 @@ function lambda_update_alias(aws::AWSConfig, name, alias;
 end
 
 
+function lambda_add_permission(aws::AWSConfig, name, permission)
+
+    lambda(aws, "POST", path="$name/policy", query=permission)
+end
+
+
+function lambda_delete_permission(aws::AWSConfig, name, id)
+
+    lambda(aws, "DELETE", path="$name/policy/$id")
+end
+
+function lambda_delete_permissions(aws::AWSConfig, name)
+
+    for p in lambda_get_permissions(aws, name)
+        lambda_delete_permission(aws, name, p["Sid"])
+    end
+end
+
+
+function lambda_get_permissions(aws::AWSConfig, name)
+
+    @protected try
+        r = lambda(aws, "GET", path="$name/policy")
+        return JSON.parse(r[:Policy])["Statement"]
+    catch e
+        @ignore if e.code == "404"
+            return Dict[]
+        end
+    end
+end
+
+
 function delete_lambda(aws::AWSConfig, name)
 
     @protected try
@@ -206,8 +241,8 @@ export AWSLambdaException
 
 
 type AWSLambdaException <: Exception
-    name::AbstractString
-    message::AbstractString
+    name::String
+    message::String
 end
 
 
@@ -468,7 +503,7 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
             mktempdir() do tmpdir
 
                 InfoZIP.unzip(options[:ZipFile], tmpdir)
-                run(`ls -la / $tmpdir`)
+                #run(`ls -la / $tmpdir`)
 
                 # Create module precompilation directory under /tmp...
                 ji_path = Base.LOAD_CACHE_PATH[1]
@@ -588,6 +623,10 @@ macro lambda(args...)
         __precompile__()
 
         module module_$name
+
+        using Compat.String
+        using Compat.UTF8String
+        using Compat.ASCIIString
 
         $(join(["using $m" for m in modules], "\n"))
 
