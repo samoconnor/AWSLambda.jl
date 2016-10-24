@@ -113,7 +113,7 @@ function create_lambda(aws::AWSConfig, name;
                        Handler="lambda_main.main",
                        Role=role_arn(aws, "jl_lambda_eval_lambda_role"),
                        Runtime="python2.7",
-                       MemorySize = 1024,
+                       MemorySize = 1536,
                        Timeout=300,
                        args...)
 
@@ -1035,7 +1035,7 @@ function create_jl_lambda_base(aws::AWSConfig;
             --role "$role" \\
             --timeout 300 \\
             --handler "lambda_main.main" \\
-            --memory-size 1024 \\
+            --memory-size 1536 \\
             --zip-file fileb:///jl_lambda_base.zip
     """]
 
