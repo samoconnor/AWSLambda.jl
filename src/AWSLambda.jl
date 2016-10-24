@@ -469,7 +469,7 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
         options[:ZipFile] = UInt8[]
     end
 
-    if AWSCore.debug_level > 0
+    if AWSCore.debug_level > 1
         @show py_config
     end
 
@@ -667,7 +667,7 @@ end
 function local_module_cache()
 
     # List of modules in local ".ji" cache.
-    r = [symbol(splitext(f)[1]) for f in
+    r = [Symbol(splitext(f)[1]) for f in
             [[readdir(p) for p in
                 filter(isdir, Base.LOAD_CACHE_PATH)]...;]]
 
@@ -732,7 +732,9 @@ end
 
 function path_prefix_split(paths::Vector)
 
-    @assert length(paths) > 0
+    if length(paths) == 0
+        return "", []
+    end
 
     # Find longest common prefix...
     i = 1
@@ -784,6 +786,7 @@ function module_files(aws::AWSConfig, modules::Vector{Symbol})
     if isempty(d)
         return [], OrderedDict()
     end
+
 
     # Remove common prefix from load path locations...
     load_path = collect(filter(p->p != pkgd, keys(d)))

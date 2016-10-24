@@ -22,8 +22,8 @@ AWSCore.set_debug_level(1)
 
 aws = aws_config(
 
-    region = "us-east-1",
-    lambda_bucket = "octech.com.au.jl.lambda",
+    region = "ap-southeast-2",
+    lambda_bucket = "octech.com.au.jl.lambda.test",
 
     lambda_force_update = true,
 
@@ -47,6 +47,7 @@ aws = aws_config(
 
 #create_jl_lambda_base(aws, ssh_key="octechkey")
 
+#exit(0)
 
 
 #-------------------------------------------------------------------------------
@@ -58,6 +59,9 @@ aws = aws_config(
 
 if false
 λ = @λ aws function count_primes(low::Int, high::Int)
+
+    using Primes
+
     count = length(primes(low, high))
     println("$count primes between $low and $high.")
     return count
@@ -109,7 +113,7 @@ mktempdir() do tmp
 
             # Check that precompile cache is being used...
             @assert !Base.stale_cachefile("/var/task/julia/TestModule/TestModule.jl",
-                                          "/var/task/julia/lib/v0.4/TestModule.ji")
+                                          "/var/task/julia/lib/v0.5/TestModule.ji")
             using TestModule
             return test_function(x)
         end
