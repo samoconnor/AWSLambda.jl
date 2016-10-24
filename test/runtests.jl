@@ -20,33 +20,34 @@ AWSCore.set_debug_level(1)
 # Load credentials...
 #-------------------------------------------------------------------------------
 
-aws = AWSCore.aws_config(
-                         region = "ap-northeast-1",
-                         lambda_bucket = "ocaws.jl.lambdatest.tokyo",
-                         #region = "us-east-1",
-                         #lambda_bucket = "ocaws.jl.lambdatest",
-                         lambda_packages = ["Requests",
-                                            "Nettle",
-                                            "LightXML",
-                                            "JSON",
-                                            "DataStructures",
-                                            "StatsBase",
-                                            "DataFrames",
-                                            "DSP",
-                                            "GZip",
-                                            "ZipFile",
-                                            "IniFile",
-                                            "SymDict",
-                                            "XMLDict",
-                                            "Retry"
-                                           ])
+aws = aws_config(
 
-#create_jl_lambda_base(aws)
+    region = "ap-southeast-2",
+    lambda_bucket = "octech.com.au.jl.lambda.test",
 
-#using AWSS3
-#s3_copy(aws, "ocaws.jl.lambdatest", "jl_lambda_base.zip",
-#             to_bucket="ocaws.jl.lambdatest.tokyo", to_path= "jl_lambda_base.zip")
+    lambda_force_update = true,
 
+    lambda_build_env = 
+        Dict("JULIA_BINDEPS_IGNORE_SYSTEM_FONT_LIBS" => "1",
+             "JULIA_BINDEPS_DISABLE_SYSTEM_PACKAGE_MANAGERS" => "1"),
+
+    disabled_lambda_packages = 
+        ["DataFrames",
+         "DSP",
+         "Fontconfig",
+         ("Cairo", "https://github.com/samoconnor/Cairo.jl.git"),
+         "Gadfly"],
+
+    disabled_lambda_yum_packages = 
+        ["libpng-devel",
+         "pixman-devel",
+         "glib2-devel",
+         "libxml2-devel"])
+
+
+#create_jl_lambda_base(aws, ssh_key="octechkey")
+
+#exit(0)
 
 
 #-------------------------------------------------------------------------------
@@ -56,17 +57,22 @@ aws = AWSCore.aws_config(
 
 # Count primes in the cloud...
 
+if false
 λ = @λ aws function count_primes(low::Int, high::Int)
+
+    using Primes
+
     count = length(primes(low, high))
     println("$count primes between $low and $high.")
     return count
 end
 
 @test invoke_lambda(aws, "count_primes", low = 10, high = 100)[:jl_data] == "21"
+end
 
 
 # Count primes in parallel...
-
+if false
 function count_primes(low::Int, high::Int)
     w = 500000000
     counts = amap(λ, [(i, min(high,i + w)) for i = low:w:high])
@@ -76,6 +82,7 @@ function count_primes(low::Int, high::Int)
 end
 
 @test count_primes(10, 10000000000) == 455052507
+end
 
 
 
@@ -86,11 +93,12 @@ mktempdir() do tmp
 
         mkpath("TestModule")
         open(io->write(io, """
+            __precompile__()
+
             module TestModule
 
             export test_function
 
-            __precompile__()
 
             test_function(x) = x * x
 
@@ -98,13 +106,14 @@ mktempdir() do tmp
         """), "TestModule/TestModule.jl", "w")
 
         push!(LOAD_PATH, "TestModule")
+        eval(:(using TestModule))
 
         # Create a lambda that uses the TestModule...
         λ = @λ aws function lambda_test(x)
 
             # Check that precompile cache is being used...
-            @assert !Base.stale_cachefile("/var/task/TestModule/TestModule.jl",
-                                          "/var/task/TestModule.ji")
+            @assert !Base.stale_cachefile("/var/task/julia/TestModule/TestModule.jl",
+                                          "/var/task/julia/lib/v0.5/TestModule.ji")
             using TestModule
             return test_function(x)
         end
@@ -130,7 +139,6 @@ end
 apigateway_create(aws, "count_primes", (:low, :high))
 
 end
-
 
 
 #==============================================================================#

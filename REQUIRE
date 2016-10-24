@@ -11,3 +11,5 @@ JSON
 SymDict
 Nettle
 Compat
+FNVHash
+Primes
