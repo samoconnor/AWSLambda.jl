@@ -812,7 +812,7 @@ end
 # Upload the Julia runtime to "aws[:lambda_bucket]/jl_lambda_base.zip".
 
 function create_jl_lambda_base(aws::AWSConfig;
-                               release = "v0.4.5", ssh_key=nothing)
+                               release = "v0.5.0", ssh_key=nothing)
 
     # Role assumed by basic "jl_lambda_eval" lambda function...
     role = create_lambda_role(aws, "jl_lambda_eval")
@@ -832,19 +832,21 @@ function create_jl_lambda_base(aws::AWSConfig;
 
     # Default Julia packages...
     pkg_list = ["Compat",
-                "FNVHash",
-                ("InfoZIP", "master"),
                 "DataFrames",
                 "DSP",
                 "Requests",
-                ("AWSCore", "master"),
-                "AWSEC2",
-                ("AWSIAM", "master"),
-                ("AWSS3", "master"),
-                ("AWSSNS", "master"),
-                "AWSSQS",
-                "AWSSES",
-                ("AWSSDB", "master"),
+                "FNVHash",
+                ("SymDict",   "master"),
+                ("XMLDict",   "master"),
+                ("InfoZIP",   "master"),
+                ("AWSCore",   "master"),
+                ("AWSEC2",    "master"),
+                ("AWSIAM",    "master"),
+                ("AWSS3",     "master"),
+                ("AWSSNS",    "master"),
+                ("AWSSQS",    "master"),
+                ("AWSSES",    "master"),
+                ("AWSSDB",    "master"),
                 ("AWSLambda", "nos3_branch")]
 
     for p in get(aws, :lambda_packages, [])
@@ -935,28 +937,21 @@ function create_jl_lambda_base(aws::AWSConfig;
         repl='OPENBLAS_TARGET_ARCH=$arch\\nMARCH=$march'
         sed s/\$find/\$repl/ < Make.inc.orig > Make.inc
 
+
         # Disable precompile path check...
         patch -p1 << EOF
         diff --git a/base/loading.jl b/base/loading.jl
-        index 1dfe06c..ff7aef5 100644
+        index e1b9946..ed0bc3e 100644
         --- a/base/loading.jl
         +++ b/base/loading.jl
-        @@ -442,6 +442,7 @@ function stale_cachefile(modpath, cachefile)
-                     return true # invalid cache file
-                 end
-                 modules, files = cache_dependencies(io)
-        +#=
-                 if files[1][1] != modpath
-                     return true # cache file was compiled from a different path
-                 end
-        @@ -451,6 +452,7 @@ function stale_cachefile(modpath, cachefile)
-                         return true
+        @@ -677,6 +677,7 @@ function stale_cachefile(modpath::String, cachefile::String)
+                         return true # cachefile doesn't provide the required version of the dependency
                      end
                  end
-        +=#
-                 # files are not stale, so module list is valid and needs checking
-                 for (M,uuid) in modules
-                     if !isdefined(Main, M)
+        +return false
+
+                 # now check if this file is fresh relative to its source files
+                 if !samefile(files[1][1], modpath)
     EOF
 
         # Build and install Julia under /var/task...
@@ -999,10 +994,15 @@ function create_jl_lambda_base(aws::AWSConfig;
     cd /task-staging
 
     cp /var/task/bin/julia bin/
-    cp -a /var/task/lib/julia/*.so* lib/julia
-    rm -f lib/julia/*-debug.so
-    cp -a /usr/lib64/libgfortran.so* lib/julia
-    cp -a /usr/lib64/libquadmath.so* lib/julia
+    cp -a /var/task/lib/julia/*.so* lib/julia/
+    rm -f lib/julia/*-debug.so*
+
+    cp -a /var/task/lib/*.so* lib/
+    rm -f lib/*-debug.so*
+
+    cp -a /usr/lib64/libgfortran.so* lib/
+    cp -a /usr/lib64/libquadmath.so* lib/
+
     cp /usr/bin/zip bin/
 
     # Copy pre-compiled modules to /tmp/task...

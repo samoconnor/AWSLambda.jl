@@ -64,7 +64,7 @@ function main(lambda_module::Module)
         append!(buf, chunk)
 
         # Wait for end of input..., then call invoke_lambda()...
-        if length(buf) >  1 && buf[end-1:end] == ['\0','\n']
+        if length(buf) >  1 && buf[end-1:end] == UInt8['\0','\n']
 
             input = JSON.parse(UTF8String(buf[1:end-2]),
                                dicttype=Dict{UTF8String,Any})
