@@ -29,7 +29,6 @@ export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
 
 
 using AWSCore
-using AWSS3
 using AWSEC2
 using AWSIAM
 using JSON
@@ -534,25 +533,11 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
                 run(`rm -f /tmp/lambda.zip`)
             end
 
-            # FIXME Upload to S3 because direct ZipFile upload to Lambda hangs...
-            #       https://github.com/JuliaWeb/Requests.jl/issues/117
-            s3_upload = false
-            if s3_upload
-                options[:S3Key] = "$name.$(options[:Description]).zip"
-                s3_put(aws, aws[:lambda_bucket], options[:S3Key], options[:ZipFile])
-                delete!(options, :ZipFile)
-            end
-
             # Deploy the lambda to AWS...
             if is_new
                 r = create_lambda(aws, name; options...)
             else
                 r = update_lambda(aws, name; options...)
-            end
-
-            # FIXME See above
-            if s3_upload
-                s3_delete(aws, aws[:lambda_bucket], options[:S3Key])
             end
         end)
 
