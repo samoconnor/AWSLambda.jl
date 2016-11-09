@@ -21,7 +21,7 @@ export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        lambda_delete_permission, lambda_delete_permissions,
        create_py_lambda,
        lambda_compilecache,
-       create_jl_lambda_base, merge_lambda_zip,
+       deploy_jl_lambda_base, create_jl_lambda_base,
        lambda_configuration,
        lambda_create_alias, lambda_update_alias, lambda_publish_version,
        apigateway, apigateway_restapis, apigateway_create,
@@ -269,10 +269,9 @@ function invoke_lambda(aws::AWSConfig, name, args; async=false)
         return r
 
     catch e
-        @ignore if e.code == "429"
-            message = "HTTP 429 $(e.message)\nSee " *
-                      "http://docs.aws.amazon.com/lambda/latest/dg/limits.html"
-            throw(AWSLambdaException(string(name), message))
+        if try e.code == "429" catch false end
+            e.message = e.message *
+                " See http://docs.aws.amazon.com/lambda/latest/dg/limits.html"
         end
     end
 
@@ -463,7 +462,7 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
                     get(aws, :lambda_error_sns_arn, ""))
     push!(py_config, "error_sns_arn = '$error_sns_arn'\n")
 
-    # Start with zipfile from options...
+    # Start with ZipFile from options...
     if !haskey(options, :ZipFile)
         options[:ZipFile] = UInt8[]
     end
@@ -500,6 +499,10 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
 
             # Unzip lambda source and modules files to /tmp...
             mktempdir() do tmpdir
+
+                if haskey(options, :ZipURL)
+                    InfoZIP.unzip(Requests.get(options[:ZipURL]).data, tmpdir)
+                end
 
                 InfoZIP.unzip(options[:ZipFile], tmpdir)
                 #run(`ls -la / $tmpdir`)
@@ -795,6 +798,18 @@ end
 
 
 #-------------------------------------------------------------------------------
+# Deploy pre-cooked Julia Base Lambda
+#-------------------------------------------------------------------------------
+
+function deploy_jl_lambda_base(aws::AWSConfig)
+
+    create_lambda(aws, "jl_lambda_eval";
+                  S3Bucket="octech.com.au.awslambda.jl.deploy",
+                  Role = create_lambda_role(aws, "jl_lambda_eval"))
+end
+
+
+#-------------------------------------------------------------------------------
 # Julia Runtime Build Script
 #-------------------------------------------------------------------------------
 
@@ -925,8 +940,8 @@ function create_jl_lambda_base(aws::AWSConfig;
 
         # Configure Julia for the CPU used by AWS Lambda...
         cp Make.inc Make.inc.orig
-        find='OPENBLAS_TARGET_ARCH=.*\$'
-        repl='OPENBLAS_TARGET_ARCH=$arch\\nMARCH=$march'
+        find='OPENBLAS_TARGET_ARCH:=.*\$'
+        repl='OPENBLAS_TARGET_ARCH:=$arch\\nMARCH:=$march'
         sed s/\$find/\$repl/ < Make.inc.orig > Make.inc
 
 
