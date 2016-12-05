@@ -548,19 +548,6 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
 end
 
 
-# See https://github.com/JuliaLang/julia/issues/15299#issuecomment-190553775
-clean_ex(ex) = ex
-function clean_ex(ex::Expr)
-    args = map(clean_ex, ex.args)
-    if ex.head in [:break, :continue]; return ex.head; end
-    if ex.head != :block; return Expr(ex.head, args...); end
-
-    args = collect(filter(ex->(!is_linenumber(ex)), args))
-    length(args) == 1 ? args[1] : Expr(ex.head, args...)
-end
-is_linenumber(ex) = isa(ex, LineNumberNode) || Base.Meta.isexpr(ex, :line)
-
-
 # Create an AWS Lambda function.
 #
 # e.g.
@@ -608,8 +595,6 @@ macro lambda(args...)
     # Generate code to extract args from event Dict...
     arg_names = [isa(a, Expr) ? a.args[1] : a for a in args]
     get_args = join(["""event["$a"]""" for a in arg_names], ", ")
-
-    body = clean_ex(body)
 
     jl_code = """
         __precompile__()
@@ -699,7 +684,9 @@ end
 function _precompiled_module_files(m, exclude_modules)
 
     # Module must be precompiled...
-    @assert m in local_module_cache()
+    if !(m in local_module_cache())
+        error("$m not precompiled. Do \"using $m\".")
+    end
 
     r = Dict()
     for p in Base.find_all_in_cache_path(m)
