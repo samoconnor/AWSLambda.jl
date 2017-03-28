@@ -10,6 +10,5 @@ Glob
 JSON
 SymDict
 Nettle
-Compat
 FNVHash
 Primes
