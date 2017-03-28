@@ -1,5 +1,5 @@
 julia 0.5
-AWSCore
+AWSCore 0.1
 AWSSQS
 AWSS3
 AWSEC2
@@ -12,3 +12,5 @@ SymDict
 Nettle
 FNVHash
 Primes
+Retry
+AWSSNS # test-only?
