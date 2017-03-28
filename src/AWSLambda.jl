@@ -527,7 +527,7 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
                 cmd *= "insert!(Base.LOAD_CACHE_PATH, 1, \"$ji_path\")\n"
                 cmd *= "using module_$name\n"
                 println(cmd)
-                run(`julia -e $cmd`)
+                run(`$JULIA_HOME/julia -e $cmd`)
                 run(`chmod -R a+r $ji_path`)
 
                 # Create new ZIP combining base image and new files from /tmp...
