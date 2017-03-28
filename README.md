@@ -19,8 +19,8 @@ Set up a bucket to store Lambda .ZIP files...
 
 ```julia
 using AWSS3
-s3_create_bucket(aws, "com.me.jl_lambda")
-aws[:lambda_bucket] = "com.me.jl_lambda"
+s3_create_bucket(aws, "com.me.jl-lambda")
+aws[:lambda_bucket] = "com.me.jl-lambda"
 ```
 
 
