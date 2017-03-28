@@ -453,6 +453,7 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
     # Get env vars from "aws" or "options"...
     env = get(options, :env,
           get(aws, :lambda_env, Dict()))
+    options[:env] = env
     for (n,v) in env
         push!(py_config, "os.environ['$n'] = '$v'\n")
     end
@@ -499,6 +500,10 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
 
             # Unzip lambda source and modules files to /tmp...
             mktempdir() do tmpdir
+
+                for (n, v) in options[:env]
+                    ENV[n] = replace(v, r"^/var/task", tmpdir)
+                end
 
                 if haskey(options, :ZipURL)
                     InfoZIP.unzip(Requests.get(options[:ZipURL]).data, tmpdir)
@@ -830,18 +835,15 @@ function create_jl_lambda_base(aws::AWSConfig;
                 "DSP",
                 "Requests",
                 "FNVHash",
-                ("SymDict",   "master"),
-                ("XMLDict",   "master"),
-                ("InfoZIP",   "master"),
-                ("AWSCore",   "master"),
-                ("AWSEC2",    "master"),
-                ("AWSIAM",    "master"),
-                ("AWSS3",     "master"),
-                ("AWSSNS",    "master"),
-                ("AWSSQS",    "master"),
-                ("AWSSES",    "master"),
-                ("AWSSDB",    "master"),
-                ("AWSLambda", "master")]
+                "AWSCore",
+                "AWSEC2",
+                "AWSIAM",
+                "AWSS3",
+                "AWSSNS",
+                "AWSSQS",
+                "AWSSES",
+                "AWSSDB",
+                "AWSLambda"]
 
     for p in get(aws, :lambda_packages, [])
         if !(p in pkg_list)
@@ -886,17 +888,10 @@ function create_jl_lambda_base(aws::AWSConfig;
     # consider downloading base tarball from here:
     # https://github.com/samoconnor/AWSLambda.jl/releases/download/v0.0.10/jl_lambda_base.tgz
 
-    if aws[:region] == "ap-southeast-2"
-        # ap-southeast-2: Intel(R) Xeon(R) CPU E5-2666 v3 @ 2.90GHz
-        arch = "HASWELL"
-        march = "core-avx2"
-        instance_type = "c4.large"
-    else
-        # ap-northeast-1: Intel(R) Xeon(R) CPU E5-2680 v2 @ 2.80GHz
-        arch = "SANDYBRIDGE"
-        march = "core-avx-i"
-        instance_type = "c3.large"
-    end
+    # Intel(R) Xeon(R) CPU E5-2666 v3 @ 2.90GHz
+    arch = "HASWELL"
+    march = "core-avx2"
+    instance_type = "c4.large"
 
     bash_script = [
 
