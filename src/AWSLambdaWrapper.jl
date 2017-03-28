@@ -15,14 +15,11 @@ __precompile__()
 module AWSLambdaWrapper
 
 
-using Compat.UTF8String
-
-
 using JSON
 
 
 # Run the lambda function...
-function invoke_lambda(lambda_module::Module, event::Dict{UTF8String,Any})
+function invoke_lambda(lambda_module::Module, event::Dict{String,Any})
 
     println("AWSLambdaWrapper.invoke_lambda($lambda_module, event)...")
 
@@ -66,8 +63,8 @@ function main(lambda_module::Module)
         # Wait for end of input..., then call invoke_lambda()...
         if length(buf) >  1 && buf[end-1:end] == UInt8['\0','\n']
 
-            input = JSON.parse(UTF8String(buf[1:end-2]),
-                               dicttype=Dict{UTF8String,Any})
+            input = JSON.parse(String(buf[1:end-2]),
+                               dicttype=Dict{String,Any})
 
             empty!(buf)
 

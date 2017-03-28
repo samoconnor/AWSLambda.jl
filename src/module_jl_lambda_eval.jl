@@ -15,13 +15,10 @@ __precompile__()
 module module_jl_lambda_eval
 
 
-using Compat.UTF8String
-
-
 lambda_function(func, args) = eval(Main, func)(args...)
 
 
-function lambda_function_with_event(event::Dict{UTF8String, Any})
+function lambda_function_with_event(event::Dict{String, Any})
     lambda_function(parse(event["func"]), event["args"])
 end
 

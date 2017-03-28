@@ -43,12 +43,6 @@ using Base.Pkg
 import Nettle: hexdigest
 
 
-# For compatibility with Julia 0.4
-using Compat.readstring
-using Compat.read
-using Compat.String
-using Compat.UTF8String
-
 
 #-------------------------------------------------------------------------------
 # AWS Lambda REST API.
@@ -606,17 +600,13 @@ macro lambda(args...)
 
         module module_$name
 
-        using Compat.String
-        using Compat.UTF8String
-        using Compat.ASCIIString
-
         $(join(["using $m" for m in modules], "\n"))
 
         function $call
             $body
         end
 
-        function lambda_function_with_event(event::Dict{UTF8String,Any})
+        function lambda_function_with_event(event::Dict{String,Any})
             lambda_function($get_args)
         end
 
