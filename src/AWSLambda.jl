@@ -866,16 +866,16 @@ function create_jl_lambda_base(aws::AWSConfig;
                 "Requests",
                 "FNVHash",
                 "GR",
-                ("SymDict", "master"),
-                ("AWSCore", "master"),
-                ("AWSEC2", "master"),
-                ("AWSIAM", "master"),
+                "SymDict",
+                "AWSCore",
+                "AWSEC2",
+                "AWSIAM",
                 "AWSS3",
-                ("AWSSNS", "master"),
-                ("AWSSQS", "master"),
+                "AWSSNS",
+                "AWSSQS",
                 "AWSSES",
-                ("AWSSDB", "master"),
-                ("AWSLambda", "master")]
+                "AWSSDB",
+                "AWSLambda"]
 
     for p in get(aws, :lambda_packages, [])
         if !(p in pkg_list)
