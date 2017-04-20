@@ -1014,11 +1014,10 @@ function create_jl_lambda_base(aws::AWSConfig;
             -o -name '*.md' \\
             -o -name 'METADATA' \\
             -o -path '*/gr/lib/movplugin.so' \\
-            -o -path '*/gr/lib/cairoplugin.so' \\
             -o -path '*/GR/src/*.js' \\
         | xargs rm -rf
 
-    find julia -name '*.so' | xargs strip
+    find . -name '*.so' | xargs strip
 
     # Create .zip file...
     zip -u --symlinks -r -9 /jl_lambda_base.zip *
