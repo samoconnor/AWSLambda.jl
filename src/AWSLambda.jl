@@ -837,9 +837,9 @@ function create_jl_lambda_base(aws::AWSConfig;
                 "AWSS3",
                 ("AWSSNS", "master"),
                 ("AWSSQS", "master"),
-                "AWSSES", 
+                "AWSSES",
                 ("AWSSDB", "master"),
-                ("AWSLambda", "master)]
+                ("AWSLambda", "master")]
 
     for p in get(aws, :lambda_packages, [])
         if !(p in pkg_list)
