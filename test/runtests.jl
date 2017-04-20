@@ -20,34 +20,11 @@ AWSCore.set_debug_level(1)
 # Load credentials...
 #-------------------------------------------------------------------------------
 
-aws = aws_config(
-
-    region = "ap-southeast-2",
-    lambda_bucket = "octech.com.au.jl.lambda.test",
-
-    lambda_force_update = true,
-
-    lambda_build_env = 
-        Dict("JULIA_BINDEPS_IGNORE_SYSTEM_FONT_LIBS" => "1",
-             "JULIA_BINDEPS_DISABLE_SYSTEM_PACKAGE_MANAGERS" => "1"),
-
-    disabled_lambda_packages = 
-        ["DataFrames",
-         "DSP",
-         "Fontconfig",
-         ("Cairo", "https://github.com/samoconnor/Cairo.jl.git"),
-         "Gadfly"],
-
-    disabled_lambda_yum_packages = 
-        ["libpng-devel",
-         "pixman-devel",
-         "glib2-devel",
-         "libxml2-devel"])
+aws = aws_config()
 
 
-#create_jl_lambda_base(aws, ssh_key="octechkey")
+deploy_jl_lambda_base()
 
-#exit(0)
 
 
 #-------------------------------------------------------------------------------

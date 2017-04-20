@@ -13,32 +13,11 @@ using AWSLambda
 aws = aws_config(region = "us-east-1")
 ```
 
-_The AWS IAM user requires acess to Lambda, EC2 and AWS._
-
-Set up a bucket to store Lambda .ZIP files...
+Deploy the base `jl_lambda_eval` function...
 
 ```julia
-using AWSS3
-s3_create_bucket(aws, "com.me.jl-lambda")
-aws[:lambda_bucket] = "com.me.jl-lambda"
+deploy_jl_lambda_base(aws)
 ```
-
-
-Build a base Julia runtime for the AWS Lambda sandbox...
-
-```julia
-aws[:lambda_packages] = ["DataStructures",
-                         "StatsBase",
-                         "DataFrames",
-                         "DSP"]
-create_jl_lambda_base(aws)
-```
-
-_`create_jl_lambda_base` creates a temporary EC2 server to build the Julia runtime.
-The runtime is stored at `aws[:lambda_bucket]/jl_lambda_base.zip`.
-It takes about 1 hour to do a full build the first time.
-After that rebuilds take about 5 minutes.
-An EC2 keypair with the name `ssh-ec2` must be created by hand._
 
 
 Execute a function on Lambda...
@@ -59,6 +38,10 @@ Evaluate an expression on Lambda...
 @lambda_eval aws ENV["LAMBDA_TASK_ROOT"]
 
 "/var/task"
+
+@lambda_eval aws run(`ls -l /var/task/bin/julia`)
+
+-rwxr-xr-x 1 slicer 497 41748 Apr 20 05:33 /var/task/bin/julia
 ```
 
 Evaluate an expression on Lambda...

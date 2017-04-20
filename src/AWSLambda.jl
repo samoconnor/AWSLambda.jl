@@ -29,6 +29,7 @@ export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
 
 
 using AWSCore
+using AWSS3
 using AWSEC2
 using AWSIAM
 using JSON
@@ -477,7 +478,8 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
     old_config = lambda_configuration(aws, name)
     new_code_hash = options[:ZipFile] |> open_zip |> Dict |>
                     serialize64 |> fnv32 |> hex
-    old_code_hash = get(old_config, :Description, nothing)
+    old_code_hash = old_config == nothing ? nothing :
+                    get(old_config, :Description, nothing)
 
     # Don't create a new lambda if one already exists with same code...
     if new_code_hash == old_code_hash && !get(aws, :lambda_force_update, false)
@@ -786,8 +788,42 @@ end
 function deploy_jl_lambda_base(aws::AWSConfig)
 
     create_lambda(aws, "jl_lambda_eval";
-                  S3Bucket="octech.com.au.awslambda.jl.deploy",
+                  S3Key="jl_lambda_base_0.1.3.zip",
+                  S3Bucket="octech.com.au.$(aws[:region]).awslambda.jl.deploy",
                   Role = create_lambda_role(aws, "jl_lambda_eval"))
+end
+
+function deploy_jl_lambda_base_to_s3(aws::AWSConfig)
+
+    zip = "jl_lambda_base_0.1.3.zip"
+
+    source_path = "octech.com.au.awslambda.jl.deploy/$zip"
+
+    lambda_regions = ["us-east-1",
+                      "us-east-2",
+                      "us-west-1",
+                      "us-west-2",
+                      "ap-northeast-2",
+                      "ap-south-1",
+                      "ap-southeast-1",
+                      "ap-southeast-2",
+                      "ap-northeast-1",
+                      "eu-central-1",
+                      "eu-west-1",
+                      "eu-west-2"]
+
+    for r in lambda_regions
+        raws = merge(aws, Dict(:region => r))
+
+        bucket = "octech.com.au.$r.awslambda.jl.deploy"
+
+        s3_create_bucket(raws, bucket)
+
+        AWSS3.s3(aws, "PUT", bucket;
+                 path = zip,
+                 headers = Dict("x-amz-copy-source" => source_path,
+                                "x-amz-acl" => "public-read"))
+    end
 end
 
 
