@@ -156,7 +156,7 @@ push!(LOAD_PATH, "TestModule")
 
     # Check that precompile cache is being used...
     @assert !Base.stale_cachefile("/var/task/TestModule/TestModule.jl",
-                                  "/var/task/TestModule.ji")
+                                  Base.LOAD_CACHE_PATH[1] * /TestModule.ji")
     using TestModule
     return test_function(x)
 end

@@ -66,14 +66,14 @@ function lambda(aws::AWSConfig, verb; path="", query="", headers = Dict())
     r = do_request(r)
 
     if isa(r, Dict)
-        r = SymbolDict(r)
+        r = symboldict(r)
     end
 
     return r
 end
 
 
-list_lambdas(aws::AWSConfig) = [SymbolDict(f)
+list_lambdas(aws::AWSConfig) = [symboldict(f)
                                 for f in lambda(aws, "GET")[:Functions]]
 
 
@@ -274,7 +274,7 @@ end
 
 
 function invoke_lambda(aws::AWSConfig, name; args...)
-    return invoke_lambda(aws, name, SymbolDict(args))
+    return invoke_lambda(aws, name, symboldict(args))
 end
 
 
@@ -815,7 +815,8 @@ function create_jl_lambda_base(aws::AWSConfig;
                 "gcc-c++",
                 "gcc-gfortran",
                 "libgfortran",
-                "openssl-devel"]
+                "openssl-devel",
+                "mesa-libGL-devel"]
 
     append!(yum_list, get(aws, :lambda_yum_packages, []))
 
@@ -823,9 +824,14 @@ function create_jl_lambda_base(aws::AWSConfig;
     pkg_list = ["Compat",
                 "DataFrames",
                 "DSP",
+                "Colors",
+                "FixedSizeArrays",
+                "Iterators",
                 "Requests",
                 "FNVHash",
-                "AWSCore",
+                "GR",
+                ("SymDict", "master")
+                ("AWSCore", "master")
                 "AWSEC2",
                 "AWSIAM",
                 "AWSS3",
@@ -1004,13 +1010,22 @@ function create_jl_lambda_base(aws::AWSConfig;
             -o -path '*/deps/usr/bin' \\
             -o -path '*/deps/usr/lib/*.a' \\
             -o -name 'doc' \\
+            -o -name 'examples' \\
             -o -name '*.md' \\
             -o -name 'METADATA' \\
+            -o -path '*/gr/lib/movplugin.so' \\
+            -o -path '*/gr/lib/cairoplugin.so' \\
+            -o -path '*/GR/src/*.js' \\
         | xargs rm -rf
 
+    find julia -name '*.so' | xargs strip
 
     # Create .zip file...
     zip -u --symlinks -r -9 /jl_lambda_base.zip *
+
+    # Copy .zip file to S3...
+    aws s3 cp /jl_lambda_base.zip \\
+              s3://$(aws[:lambda_bucket])/jl_lambda_base.zip
 
     # Delete Lambda function...
     aws lambda delete-function --function-name "jl_lambda_eval" || true
