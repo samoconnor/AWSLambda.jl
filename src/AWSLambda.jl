@@ -52,7 +52,7 @@ import Nettle: hexdigest
 
 function lambda(aws::AWSConfig, verb; path="", query="", headers = Dict())
 
-    resource = "/2015-03-31/functions/$path"
+    resource = AWSCore.escape_path("/2015-03-31/functions/$path")
 
     r = @SymDict(
         service  = "lambda",
