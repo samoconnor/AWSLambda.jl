@@ -23,7 +23,7 @@ AWSCore.set_debug_level(1)
 aws = aws_config()
 
 
-deploy_jl_lambda_base()
+deploy_jl_lambda_base(aws)
 
 
 
@@ -63,6 +63,7 @@ end
 
 
 
+if false
 mktempdir() do tmp
     cd(tmp) do
 
@@ -97,6 +98,7 @@ mktempdir() do tmp
 
         @test λ(4) == 16
     end
+end
 end
 
 
