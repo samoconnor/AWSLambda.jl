@@ -41,8 +41,10 @@ using Glob
 using FNVHash
 using Base.Pkg
 
-import Nettle: hexdigest
-
+# FIXME
+# - DLQ
+# - tagging
+# - environment variables
 
 
 #-------------------------------------------------------------------------------
@@ -64,7 +66,7 @@ function lambda(aws::AWSConfig, verb; path="", query="", headers = Dict())
         aws...
     )
 
-    r = do_request(r)
+    r = AWSCore.do_request(r)
 
     if isa(r, Dict)
         r = symboldict(r)
