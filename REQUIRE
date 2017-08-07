@@ -9,7 +9,6 @@ DataStructures
 Glob
 JSON
 SymDict 0.1.2
-Nettle
 FNVHash
 Primes
 Retry
