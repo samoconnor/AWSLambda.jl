@@ -8,6 +8,9 @@
 # Copyright OC Technology Pty Ltd 2014 - All rights reserved
 #==============================================================================#
 
+FIXME https://github.com/lambci/docker-lambda
+FIXME https://github.com/awslabs/serverless-application-model
+FIXME https://github.com/awslabs/aws-sam-local
 
 __precompile__()
 

@@ -1,4 +1,4 @@
-FROM lambdajl
+FROM samoconnor/lambdajl
 
 COPY stage.sh /var/src 
 

@@ -1,4 +1,4 @@
-FROM lambdajlsrc
+FROM samoconnor/lambdajlsrc
 
 COPY *.patch /var/src/julia/
 

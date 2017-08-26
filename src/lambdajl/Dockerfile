@@ -1,4 +1,4 @@
-FROM lambdajlbase
+FROM samoconnor/lambdajlbase
 
 RUN julia -e 'Pkg.update()'
 
