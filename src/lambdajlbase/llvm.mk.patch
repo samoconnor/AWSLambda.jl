@@ -1,0 +1,11 @@
+--- deps/llvm.mk.orig   2017-08-26 02:00:05.041721303 +0000
++++ deps/llvm.mk    2017-08-26 02:00:23.848972314 +0000
+@@ -555,7 +555,7 @@
+
+ ifeq ($(LLVM_USE_CMAKE),1)
+ LLVM_INSTALL = \
+-	cd $1 && $$(CMAKE) -DCMAKE_INSTALL_PREFIX="$2$$(build_prefix)" -P cmake_install.cmake
++	cd $1 && DESTDIR="" $$(CMAKE) -DCMAKE_INSTALL_PREFIX="$2$$(build_prefix)" -P cmake_install.cmake
+ ifeq ($(OS), WINNT)
+ LLVM_INSTALL += && cp $2$$(build_shlibdir)/LLVM.dll $2$$(build_depsbindir)
+ endif
