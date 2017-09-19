@@ -43,6 +43,10 @@ using Glob
 using FNVHash
 using Base.Pkg
 
+
+const jl_version = "$(VERSION.major)$(VERSION.minor)"
+const aws_lamabda_jl_version = "0.2.1"
+
 # FIXME
 # - DLQ
 # - tagging
@@ -396,7 +400,8 @@ macro lambda_call(aws, args...)
     @assert isa(modules, Vector{Symbol})
 
     esc(quote
-        (args...) -> invoke_jl_lambda($aws, :jl_lambda_eval, $func, Any[args...];
+        (args...) -> invoke_jl_lambda($aws, "jl_lambda_eval_$jl_version",
+                                            $func, Any[args...];
                                             jl_modules = $modules)
     end)
 end
@@ -789,19 +794,26 @@ end
 # Deploy pre-cooked Julia Base Lambda
 #-------------------------------------------------------------------------------
 
+const base_zip = "jl_lambda_base_$(VERSION)_$(aws_lamabda_jl_version).zip"
+
 function deploy_jl_lambda_base(aws::AWSConfig)
 
-    create_lambda(aws, "jl_lambda_eval";
-                  S3Key="jl_lambda_base_0.1.3.zip",
+    create_lambda(aws, "jl_lambda_eval_$jl_version";
+                  S3Key=base_zip,
                   S3Bucket="octech.com.au.$(aws[:region]).awslambda.jl.deploy",
                   Role = create_lambda_role(aws, "jl_lambda_eval"))
 end
 
 function deploy_jl_lambda_base_to_s3(aws::AWSConfig)
 
-    zip = "jl_lambda_base_0.1.3.zip"
+    source_bucket = "octech.com.au.ap-southeast-2.awslambda.jl.deploy"
 
-    source_path = "octech.com.au.awslambda.jl.deploy/$zip"
+    # Upload base zip to source bucket...
+    s3(aws, "PUT", source_bucket;
+       path = base_zip,
+       headers = Dict("x-amz-acl" => "public-read"),
+       content = read(joinpath(@__DIR__,
+                               "../docker/jl_lambda_base_$VERSION.zip")))
 
     lambda_regions = ["us-east-1",
                       "us-east-2",
@@ -816,6 +828,7 @@ function deploy_jl_lambda_base_to_s3(aws::AWSConfig)
                       "eu-west-1",
                       "eu-west-2"]
 
+    # Deploy to other regions...
     for r in lambda_regions
         raws = merge(aws, Dict(:region => r))
 
@@ -824,295 +837,11 @@ function deploy_jl_lambda_base_to_s3(aws::AWSConfig)
         s3_create_bucket(raws, bucket)
 
         AWSS3.s3(aws, "PUT", bucket;
-                 path = zip,
-                 headers = Dict("x-amz-copy-source" => source_path,
-                                "x-amz-acl" => "public-read"))
+                 path = base_zip,
+                 headers = Dict(
+                     "x-amz-copy-source" => "$source_bucket/$base_zip"
+                     "x-amz-acl" => "public-read"))
     end
-end
-
-
-#-------------------------------------------------------------------------------
-# Julia Runtime Build Script
-#-------------------------------------------------------------------------------
-
-
-# Build the Julia runtime using a temporary EC2 server.
-# Takes about 1 hour, (or about 5 minutes if full rebuild is not done).
-# Upload the Julia runtime to "aws[:lambda_bucket]/jl_lambda_base.zip".
-
-function create_jl_lambda_base(aws::AWSConfig;
-                               release = "v0.5.0", ssh_key=nothing)
-
-    # Role assumed by basic "jl_lambda_eval" lambda function...
-    role = create_lambda_role(aws, "jl_lambda_eval")
-
-    # List of Amazon Linux packages to install...
-    yum_list = ["git",
-                "cmake",
-                "m4",
-                "patch",
-                "gcc",
-                "gcc-c++",
-                "gcc-gfortran",
-                "libgfortran",
-                "openssl-devel",
-                "mesa-libGL-devel"]
-
-    append!(yum_list, get(aws, :lambda_yum_packages, []))
-
-    # Default Julia packages...
-    pkg_list = ["Compat",
-                "DataFrames",
-                "DSP",
-                "Colors",
-                "FixedSizeArrays",
-                "Iterators",
-                "Requests",
-                "FNVHash",
-                "GR",
-                "SymDict",
-                "AWSCore",
-                "AWSEC2",
-                "AWSIAM",
-                "AWSS3",
-                "AWSSNS",
-                "AWSSQS",
-                "AWSSES",
-                "AWSSDB",
-                "AWSLambda"]
-
-    for p in get(aws, :lambda_packages, [])
-        if !(p in pkg_list)
-            push!(pkg_list, p)
-        end
-    end
-
-    build_env = []
-    for (k,v) in get(aws, :lambda_build_env, Dict())
-        push!(build_env, "export $k=\"$v\"\n")
-    end
-
-    # List of Julia packages to install...
-    pkg_add_cmd = "Pkg.init(); Pkg.update(); "
-    pkg_using_cmd = "using AWSLambdaWrapper; using module_jl_lambda_eval; "
-    for p in pkg_list
-        if isa(p, Tuple)
-            p, x = p
-            if ismatch(r"^http", x)
-                pkg_add_cmd *= "Pkg.clone(\"$x\"); "
-                pkg_add_cmd *= "Pkg.build(\"$p\"); "
-            else
-                pkg_add_cmd *= "Pkg.add(\"$p\"); "
-                pkg_add_cmd *= "Pkg.checkout(\"$p\", \"$x\"); "
-            end
-        else
-            pkg_add_cmd *= "Pkg.add(\"$p\"); "
-        end
-        pkg_using_cmd *= "using $p; "
-    end
-
-    # ZIP archive of wrapper code...
-    zip = ["lambda_main.py",
-           "lambda_config.py",
-           "AWSLambdaWrapper.jl",
-           "module_jl_lambda_eval.jl"]
-    zip = Dict(Pair[f => read(joinpath(dirname(@__FILE__), f)) for f in zip])
-    zip = base64encode(create_zip(zip))
-
-
-    # FIXME
-    # consider downloading base tarball from here:
-    # https://github.com/samoconnor/AWSLambda.jl/releases/download/v0.0.10/jl_lambda_base.tgz
-
-    # Intel(R) Xeon(R) CPU E5-2666 v3 @ 2.90GHz
-    arch = "HASWELL"
-    march = "core-avx2"
-    instance_type = "c4.large"
-
-    bash_script = [
-
-    """
-    cd /
-
-    # Set up /var/task Lambda staging dir...
-    mkdir -p /var/task/julia
-    export HOME=/var/task
-    export JULIA_PKGDIR=/var/task/julia
-    export AWS_DEFAULT_REGION=$(aws[:region])
-    """,
-
-    build_env...,
-
-    """
-    if aws s3 cp s3://$(aws[:lambda_bucket])/jl_lambda_base.tgz \\
-                 /jl_lambda_base.tgz
-    then
-        tar xzf jl_lambda_base.tgz
-    else
-
-        # Download Julia source code...
-        git clone git://github.com/JuliaLang/julia.git
-        cd julia
-        git checkout $release
-
-
-        # Configure Julia for the CPU used by AWS Lambda...
-        cp Make.inc Make.inc.orig
-        find='OPENBLAS_TARGET_ARCH:=.*\$'
-        repl='OPENBLAS_TARGET_ARCH:=$arch\\nMARCH:=$march'
-        sed s/\$find/\$repl/ < Make.inc.orig > Make.inc
-
-
-        # Disable precompile path check...
-        patch -p1 << EOF
-        diff --git a/base/loading.jl b/base/loading.jl
-        index e1b9946..ed0bc3e 100644
-        --- a/base/loading.jl
-        +++ b/base/loading.jl
-        @@ -677,6 +677,7 @@ function stale_cachefile(modpath::String, cachefile::String)
-                         return true # cachefile doesn't provide the required version of the dependency
-                     end
-                 end
-        +return false
-
-                 # now check if this file is fresh relative to its source files
-                 if !samefile(files[1][1], modpath)
-    EOF
-
-        # Build and install Julia under /var/task...
-        make -j2 prefix= DESTDIR=/var/task all
-        make prefix= DESTDIR=/var/task install
-
-        # Save tarball of raw Julia build...
-        cd /
-        tar czfP jl_lambda_base.tgz var/task
-        aws s3 cp /jl_lambda_base.tgz \\
-                  s3://$(aws[:lambda_bucket])/jl_lambda_base.tgz
-    fi
-
-    # Disable yum to prevent BinDeps.jl from using it...
-    # https://github.com/JuliaLang/BinDeps.jl/issues/168
-    chmod 000 /usr/bin/yum
-
-    # Install Julia modules...
-    /var/task/bin/julia -e '$pkg_add_cmd'
-    echo $zip | base64 -d > /tmp/jl.zip && unzip -d /var/task /tmp/jl.zip
-
-    # Precompile modules...
-    #JULIA_LOAD_PATH=/var/task /var/task/bin/julia -e '$pkg_using_cmd'
-
-    # FIXME userimg experiment....
-    echo '$pkg_using_cmd' > /tmp/userimg.jl
-    cp /var/task/AWSLambdaWrapper.jl \\
-       /var/task/module_jl_lambda_eval.jl \\
-       /var/task/julia/v*
-    HAVE_INFOZIP=1 \\
-    /var/task/bin/julia /var/task/share/julia/build_sysimg.jl \\
-                        /tmp/sys native /tmp/userimg.jl
-    mv -f /tmp/sys.so /var/task/lib/julia/
-    rm -f /var/task/julia/lib/v*/*.ji
-
-    # Copy minimal set of files to /task-staging...
-    mkdir -p /task-staging/bin
-    mkdir -p /task-staging/lib/julia
-
-    cd /task-staging
-
-    cp /var/task/bin/julia bin/
-    cp -a /var/task/lib/julia/*.so* lib/julia/
-    rm -f lib/julia/*-debug.so*
-
-    cp -a /var/task/lib/*.so* lib/
-    rm -f lib/*-debug.so*
-
-    cp -a /usr/lib64/libgfortran.so* lib/
-    cp -a /usr/lib64/libquadmath.so* lib/
-
-    cp /usr/bin/zip bin/
-
-    # Copy pre-compiled modules to /tmp/task...
-    cp -a /var/task/julia .
-    chmod -R a+r julia/lib/
-    cp -a /var/task/*.jl .
-    cp -a /var/task/*.py .
-
-    # Remove unnecessary files...
-    find julia -name '.git' \\
-            -o -name '.cache' \\
-            -o -name '.travis.yml' \\
-            -o -name '.gitignore' \\
-            -o -name 'REQUIRE' \\
-            -o -name 'test' \\
-            -o -path '*/deps/downloads' \\
-            -o -path '*/deps/builds' \\
-            -o \\( -type f -path '*/deps/src/*' ! -name '*.so.*' \\) \\
-            -o -path '*/deps/usr/include' \\
-            -o -path '*/deps/usr/bin' \\
-            -o -path '*/deps/usr/lib/*.a' \\
-            -o -name 'doc' \\
-            -o -name 'examples' \\
-            -o -name '*.md' \\
-            -o -name 'METADATA' \\
-            -o -path '*/gr/lib/movplugin.so' \\
-            -o -path '*/GR/src/*.js' \\
-        | xargs rm -rf
-
-    find . -name '*.so' | xargs strip
-
-    # Create .zip file...
-    zip -u --symlinks -r -9 /jl_lambda_base.zip *
-
-    # Copy .zip file to S3...
-    aws s3 cp /jl_lambda_base.zip \\
-              s3://$(aws[:lambda_bucket])/jl_lambda_base.zip
-
-    # Delete Lambda function...
-    aws lambda delete-function --function-name "jl_lambda_eval" || true
-
-    # Create Lambda function...
-    aws lambda create-function \\
-            --function-name "jl_lambda_eval" \\
-            --runtime "python2.7" \\
-            --role "$role" \\
-            --timeout 300 \\
-            --handler "lambda_main.main" \\
-            --memory-size 1536 \\
-            --zip-file fileb:///jl_lambda_base.zip
-    """]
-
-    ec2_bash(aws,
-
-        bash_script...,
-
-        instance_name = "ocaws_jl_lambda_build_server",
-
-        instance_type = instance_type,
-
-        image = "amzn-ami-hvm-2015.09.1.x86_64-gp2",
-
-        ssh_key = ssh_key,
-
-        packages = yum_list,
-
-        policy = """{
-            "Version": "2012-10-17",
-            "Statement": [ {
-                "Effect": "Allow",
-                "Action": "lambda:*",
-                "Resource": "*"
-            }, {
-                "Effect": "Allow",
-                "Action": "iam:PassRole",
-                "Resource": "*"
-            }, {
-                "Effect": "Allow",
-                "Action": [ "s3:PutObject", "s3:GetObject" ],
-                "Resource": [
-                    "arn:aws:s3:::$(aws[:lambda_bucket])/jl_lambda_base.*"
-                ]
-            } ]
-        }""")
-
 end
 
 
