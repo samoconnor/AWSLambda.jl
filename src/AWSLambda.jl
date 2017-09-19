@@ -398,9 +398,11 @@ macro lambda_call(aws, args...)
     func = Expr(:quote, args[end])
     modules = length(args) > 1 ? eval(args[1]) : Symbol[]
     @assert isa(modules, Vector{Symbol})
+    #name = "jl_lambda_eval_$jl_version"
+    name = "jl_lambda_eval"
 
     esc(quote
-        (args...) -> invoke_jl_lambda($aws, "jl_lambda_eval_$jl_version",
+        (args...) -> invoke_jl_lambda($aws, $name,
                                             $func, Any[args...];
                                             jl_modules = $modules)
     end)
@@ -798,7 +800,8 @@ const base_zip = "jl_lambda_base_$(VERSION)_$(aws_lamabda_jl_version).zip"
 
 function deploy_jl_lambda_base(aws::AWSConfig)
 
-    create_lambda(aws, "jl_lambda_eval_$jl_version";
+    #create_lambda(aws, "jl_lambda_eval_$jl_version";
+    create_lambda(aws, "jl_lambda_eval";
                   S3Key=base_zip,
                   S3Bucket="octech.com.au.$(aws[:region]).awslambda.jl.deploy",
                   Role = create_lambda_role(aws, "jl_lambda_eval"))
@@ -809,11 +812,13 @@ function deploy_jl_lambda_base_to_s3(aws::AWSConfig)
     source_bucket = "octech.com.au.ap-southeast-2.awslambda.jl.deploy"
 
     # Upload base zip to source bucket...
-    s3(aws, "PUT", source_bucket;
-       path = base_zip,
-       headers = Dict("x-amz-acl" => "public-read"),
-       content = read(joinpath(@__DIR__,
-                               "../docker/jl_lambda_base_$VERSION.zip")))
+
+    AWSS3.s3(aws, "PUT", source_bucket;
+             path = base_zip,
+             headers = Dict("x-amz-acl" => "public-read"),
+             content = read(joinpath(Pkg.dir("AWSLambda"),
+                                     "docker/jl_lambda_base.$VERSION.zip")))
+
 
     lambda_regions = ["us-east-1",
                       "us-east-2",
@@ -822,25 +827,27 @@ function deploy_jl_lambda_base_to_s3(aws::AWSConfig)
                       "ap-northeast-2",
                       "ap-south-1",
                       "ap-southeast-1",
-                      "ap-southeast-2",
                       "ap-northeast-1",
                       "eu-central-1",
                       "eu-west-1",
                       "eu-west-2"]
 
     # Deploy to other regions...
-    for r in lambda_regions
-        raws = merge(aws, Dict(:region => r))
+    @sync for r in lambda_regions
 
+        raws = merge(aws, Dict(:region => r))
         bucket = "octech.com.au.$r.awslambda.jl.deploy"
 
-        s3_create_bucket(raws, bucket)
+        @async begin
 
-        AWSS3.s3(aws, "PUT", bucket;
-                 path = base_zip,
-                 headers = Dict(
-                     "x-amz-copy-source" => "$source_bucket/$base_zip"
-                     "x-amz-acl" => "public-read"))
+            s3_create_bucket(raws, bucket)
+
+            AWSS3.s3(aws, "PUT", bucket;
+                     path = base_zip,
+                     headers = Dict(
+                         "x-amz-copy-source" => "$source_bucket/$base_zip",
+                         "x-amz-acl" => "public-read"))
+        end
     end
 end
 
