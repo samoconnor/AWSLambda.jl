@@ -396,7 +396,7 @@ macro lambda_call(aws, args...)
     @assert isa(modules, Vector{Symbol})
 
     esc(quote
-        (args...) -> invoke_jl_lambda($aws, :jl_lambda_eval, $func, args;
+        (args...) -> invoke_jl_lambda($aws, :jl_lambda_eval, $func, Any[args...];
                                             jl_modules = $modules)
     end)
 end

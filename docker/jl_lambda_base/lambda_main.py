@@ -14,9 +14,19 @@ from __future__ import print_function
 import subprocess
 import os
 import json
-import threading
 import time
 import select
+
+
+# Get CPU type for logging...
+# See https://forums.aws.amazon.com/thread.jspa?messageID=804338
+def cpu_model():
+   with open("/proc/cpuinfo") as f:
+       for l in f:
+           if "model name" in l:
+               return l.split(":")[1].strip()
+
+cpu_model_name = cpu_model()
 
 
 # Set Julia package directory...
@@ -32,7 +42,7 @@ os.environ['PATH'] += ':' + root + '/bin'
 execfile('lambda_config.py')
 
 
-# Start Julia interpreter and run /var/task/lambda.jl...
+# Start Julia interpreter...
 julia_proc = None
 def start_julia():
     global julia_proc
@@ -46,30 +56,31 @@ def start_julia():
                                        stderr=subprocess.STDOUT)
 
 
-# Pass event and context to Julia as JSON with null,newline terminator...
-def julia_invoke_lambda(event, context):
-    json.dump({'event': event, 'context': context.__dict__},
-              julia_proc.stdin,
-              default=lambda o: '')
-    julia_proc.stdin.write('\0\n')
-    julia_proc.stdin.flush()
-
-
 def main(event, context):
 
-    # Clean up old return value file...
+    print(cpu_model_name)
+
+    # Clean up old return value files...
     if os.path.isfile('/tmp/lambda_out'):
         os.remove('/tmp/lambda_out')
+
+    # Store input in tmp file...
+    with open('/tmp/lambda_in', 'w') as f:
+        json.dump({
+            'event': event,
+            'context': context.__dict__
+        }, f, default=lambda o: '')
 
     # Start or restart the Julia interpreter as needed...
     global julia_proc
     if julia_proc is None or julia_proc.poll() is not None:
         start_julia()
 
-    # Pass "event" to Julia in new thread...
-    threading.Thread(target=julia_invoke_lambda, args=(event, context)).start()
+    # Tell the Julia interpreter that input is ready...
+    julia_proc.stdin.write('\n')
+    julia_proc.stdin.flush()
 
-    # Calcualte execution time limit...
+    # Calculate execution time limit...
     time_limit = time.time() + context.get_remaining_time_in_millis()/1000.0
     time_limit -= 5.0
 
@@ -81,9 +92,14 @@ def main(event, context):
                               time_limit - time.time())
         if julia_proc.stdout in ready[0]:
             line = julia_proc.stdout.readline()
-            if line == '\0\n' or line == '':
+            if line == '\0\n':
                 complete = True
                 break
+            if line == '':
+                message = 'EOF on Julia stdout!'
+                if julia_proc.poll() != None:
+                    message += (' Exit code: ' + str(julia_proc.returncode))
+                raise Exception(message + '\n' + out + cpu_model_name)
             print(line, end='')
             out += line
 
@@ -119,7 +135,7 @@ def main(event, context):
             except Exception:
                 pass
 
-        raise Exception(out)
+        raise Exception(out + cpu_model_name)
 
     # Return content of output file...
     if os.path.isfile('/tmp/lambda_out'):

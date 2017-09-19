@@ -15,12 +15,20 @@ __precompile__()
 module module_jl_lambda_eval
 
 
-lambda_function(func, args) = eval(Main, func)(args...)
+lambda_function(func::Expr, args::Vector{Any}) = eval(Main, func)(args...)
 
 
 function lambda_function_with_event(event::Dict{String, Any})
-    lambda_function(parse(event["func"]), event["args"])
+    local func::String
+    func = event["func"]
+    local args::Vector
+    args = event["args"]
+    lambda_function(parse(func), (args...))
 end
+
+
+precompile(lambda_function, (Expr, Vector{Any}))
+precompile(lambda_function_with_event, (Dict{String,Any},))
 
 
 end

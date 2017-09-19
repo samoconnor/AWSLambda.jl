@@ -3,6 +3,49 @@
 set -e
 set -x
 
+export PATH=var/task/bin:$PATH
+export JULIA_PKGDIR=/var/task/julia
+export HAVE_INFOZIP=1
+
+cp /var/host/jl_lambda_base/* /var/task
+
+julia -e 'Pkg.update()'
+
+# Install Julia Packages...
+JL_PACKAGES="
+    AWSCore
+    AWSEC2
+    AWSIAM
+    AWSS3
+    AWSSNS
+    AWSSQS
+    AWSSES
+    AWSSDB
+    AWSLambda
+"
+
+julia -e \
+    'for p in ARGS; println(p); Pkg.add(p); end' \
+    $JL_PACKAGES
+
+julia -e \
+    'for p in ARGS; println("using $p"); end' \
+    $JL_PACKAGES \
+    AWSLambdaWrapper \
+    module_jl_lambda_eval \
+    > /var/src/userimg.jl
+
+cp  /var/task/AWSLambdaWrapper.jl \
+    /var/task/module_jl_lambda_eval.jl \
+    /var/task/julia/v* \
+
+# Build Julia sys.so...
+julia /var/task/share/julia/build_sysimg.jl \
+    /var/src/sys core-avx-i /var/src/userimg.jl
+mv -f /var/src/sys.so /var/task/lib/julia/
+rm -f /var/task/julia/lib/v*/*.ji
+
+
 # Copy minimal set of files to /task-staging...
 mkdir -p /var/task-staging/bin
 mkdir -p /var/task-staging/lib/julia
@@ -51,4 +94,4 @@ find julia -name '.git' \
 find . -name '*.so' | xargs strip
 
 # Create .zip file...
-zip -u --symlinks -r -9 /var/src/jl_lambda_base.zip *
+zip -u --symlinks -r -9 /var/host/$1 *
