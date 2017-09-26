@@ -469,6 +469,14 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
                     get(aws, :lambda_error_sns_arn, ""))
     push!(py_config, "error_sns_arn = '$error_sns_arn'\n")
 
+    # Get DLQ topic from "aws" if not already in "options"...
+    if !haskey(options, :DeadLetterConfig) &&
+        haskey(aws, :lambda_error_sns_arn)
+
+        options[:DeadLetterConfig] = Dict(:TargetArn =>
+                                          aws[:lambda_dlq_sns_arn])
+    end
+
     # Start with ZipFile from options...
     if !haskey(options, :ZipFile)
         options[:ZipFile] = UInt8[]
