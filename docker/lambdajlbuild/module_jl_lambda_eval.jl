@@ -15,20 +15,25 @@ __precompile__()
 module module_jl_lambda_eval
 
 
-lambda_function(func::Expr, args::Vector{Any}) = eval(Main, func)(args...)
+lambda_function(f::Function) = Base.invokelatest(f)
 
+lambda_function(e::Expr) = eval(Main, e)
 
-function lambda_function_with_event(event::Dict{String, Any})
-    local func::String
-    func = event["func"]
-    local args::Vector
-    args = event["args"]
-    lambda_function(parse(func), (args...))
+function lambda_function(v::Vector{Expr})
+    for e in v[1:end-1]
+        eval(Main, e)
+    end
+    eval(Main, v[end])
 end
 
 
-precompile(lambda_function, (Expr, Vector{Any}))
-precompile(lambda_function_with_event, (Dict{String,Any},))
+lambda_function_with_event(event::String) = include_string(event)
+
+
+precompile(lambda_function, (Function,))
+precompile(lambda_function, (Expr,))
+precompile(lambda_function, (Vector{Expr},))
+precompile(lambda_function_with_event, (String,))
 
 
 end

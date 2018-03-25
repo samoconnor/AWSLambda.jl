@@ -59,15 +59,15 @@ end
 Deploy a Lambda function to count prime numbers...
 
 ```julia
-λ = @λ aws function count_primes(low::Int, high::Int)
+λ = @lambda aws function count_primes(low::Int, high::Int)
     count = length(primes(low, high))
     println("$count primes between $low and $high.")
     return count
 end
 ```
-_The @λ macro creates an AWS Lambda named "count_primes". It wraps the body
+_The @lambda macro creates an AWS Lambda named "count_primes". It wraps the body
 of the function with serialisation/deserialistion code and packages it into
-a .ZIP file. The .ZIP file deployed to AWS. The @λ macro returns an
+a .ZIP file. The .ZIP file deployed to AWS. The @lambda macro returns an
 anonymous function that can be called to invoke the Lambda._
 
 Run 20 instances of λ in parallel using `amap()`...
@@ -135,7 +135,7 @@ Use the module in a Lambda...
 ```julia
 push!(LOAD_PATH, "TestModule")
 
-λ = @λ aws function lambda_test(x)
+λ = @lambda aws function lambda_test(x)
 
     # Check that precompile cache is being used...
     @assert !Base.stale_cachefile("/var/task/TestModule/TestModule.jl",
@@ -146,7 +146,7 @@ end
 
 @test λ(4) == 16
 ```
-_The @λ macro sees the `using` statement and bundles the corresponding `.jl`
+_The @lambda macro sees the `using` statement and bundles the corresponding `.jl`
 files into the deployment .ZIP file. It then does a dry-run invocation to
 trigger module precompilation. The resulting '.ji' files are retrieved from
 the Lambda sandbox and added to the deployment .ZIP file. Subsequent calls

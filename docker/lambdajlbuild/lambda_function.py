@@ -1,5 +1,5 @@
 #==============================================================================#
-# lambda_main.py
+# lambda_function.py
 #
 # AWS Lambda wrapper for Julia.
 #
@@ -56,20 +56,19 @@ def start_julia():
                                        stderr=subprocess.STDOUT)
 
 
-def main(event, context):
+def lambda_handler(event, context):
 
     print(cpu_model_name)
+
+    # Store input in tmp files...
+    with open('/tmp/lambda_in', 'w') as f:
+        json.dump(event, f)
+    with open('/tmp/lambda_context', 'w') as f:
+        json.dump(context.__dict__, f, default=lambda o: '')
 
     # Clean up old return value files...
     if os.path.isfile('/tmp/lambda_out'):
         os.remove('/tmp/lambda_out')
-
-    # Store input in tmp file...
-    with open('/tmp/lambda_in', 'w') as f:
-        json.dump({
-            'event': event,
-            'context': context.__dict__
-        }, f, default=lambda o: '')
 
     # Start or restart the Julia interpreter as needed...
     global julia_proc

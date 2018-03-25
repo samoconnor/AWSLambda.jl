@@ -10,6 +10,9 @@
 
 #FIXME https://github.com/awslabs/serverless-application-model
 #FIXME https://github.com/awslabs/aws-sam-local
+#FIXME DLQ
+#FIXME tagging
+#FIXME environment variables
 
 __precompile__()
 
@@ -18,21 +21,19 @@ module AWSLambda
 
 
 export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
-       async_lambda, create_jl_lambda, invoke_jl_lambda, create_lambda_role,
-       @λ, @lambda, lambda_add_permission, lambda_get_permissions,
+       async_lambda, create_jl_lambda, invoke_jl_lambda,
+       @lambda, lambda_add_permission, lambda_get_permissions,
        lambda_delete_permission, lambda_delete_permissions,
        create_py_lambda,
-       lambda_compilecache,
-       deploy_jl_lambda_base, create_jl_lambda_base,
+       deploy_jl_lambda_base,
        lambda_configuration,
        lambda_create_alias, lambda_update_alias, lambda_publish_version,
        apigateway, apigateway_restapis, apigateway_create,
-       @lambda_eval, @lambda_call, lambda_include, lambda_include_string
+       @lambda_eval,
+       lambda_eval, lambda_function, lambda_include, lambda_include_string
 
 
 using AWSCore
-using AWSS3
-using AWSEC2
 using AWSIAM
 using JSON
 using InfoZIP
@@ -42,15 +43,11 @@ using DataStructures
 using Glob
 using FNVHash
 using Base.Pkg
+using HTTP
 
+const jl_version = "JL_$(replace(string(VERSION), ".", "_"))"
+const aws_lamabda_jl_version = "0.3.0"
 
-const jl_version = "$(VERSION.major)$(VERSION.minor)"
-const aws_lamabda_jl_version = "0.2.1"
-
-# FIXME
-# - DLQ
-# - tagging
-# - environment variables
 
 
 #-------------------------------------------------------------------------------
@@ -60,17 +57,19 @@ const aws_lamabda_jl_version = "0.2.1"
 
 function lambda(aws::AWSConfig, verb; path="", query="", headers = Dict())
 
-    resource = AWSCore.escape_path("/2015-03-31/functions/$path")
+    resource = HTTP.escapepath("/2015-03-31/functions/$path")
 
     r = @SymDict(
         service  = "lambda",
-        url      = aws_endpoint("lambda", aws[:region]) * resource,
+        ordered_json_dict = false,
         content  = query == "" ? "" : json(query),
         headers,
         resource,
         verb,
         aws...
     )
+
+    r[:url] = AWSCore.service_url(aws, r)
 
     r = AWSCore.do_request(r)
 
@@ -82,8 +81,10 @@ function lambda(aws::AWSConfig, verb; path="", query="", headers = Dict())
 end
 
 
-list_lambdas(aws::AWSConfig) = [symboldict(f)
-                                for f in lambda(aws, "GET")[:Functions]]
+list_lambdas(aws::AWSConfig) =
+    [symboldict(f) for f in lambda(aws, "GET")[:Functions]]
+
+list_lambdas() = list_lambdas(default_aws_config())
 
 
 function lambda_configuration(aws::AWSConfig, name)
@@ -93,11 +94,13 @@ function lambda_configuration(aws::AWSConfig, name)
         return lambda(aws, "GET", path="$name/configuration")
 
     catch e
-        @ignore if e.code == "404" end
+        @ignore if ecode(e) == "404" end
     end
 
     return nothing
 end
+
+lambda_configuration(name) = lambda_configuration(default_aws_config(), name)
 
 
 function lambda_update_configuration(aws::AWSConfig, name, options)
@@ -105,15 +108,20 @@ function lambda_update_configuration(aws::AWSConfig, name, options)
     lambda(aws, "PUT", path="$name/configuration", query=options)
 end
 
+lambda_update_configuration(name, options) = 
+    lambda_update_configuration(default_aws_config(), name, options)
+
 
 lambda_exists(aws::AWSConfig, name) = lambda_configuration(aws, name) != nothing
+
+lambda_exists(name) = lambda_exists(default_aws_config(), name)
 
 
 function create_lambda(aws::AWSConfig, name;
                        ZipFile=nothing,
                        S3Key="$name.zip",
                        S3Bucket=get(aws, :lambda_bucket, nothing),
-                       Handler="lambda_main.main",
+                       Handler="lambda_function.lambda_handler",
                        Role=role_arn(aws, "jl_lambda_eval_lambda_role"),
                        Runtime="python2.7",
                        MemorySize = 1536,
@@ -142,9 +150,11 @@ function create_lambda(aws::AWSConfig, name;
 
     catch e
         # Retry in case Role was just created and is not yet active...
-        @delay_retry if e.code == "400" end
+        @delay_retry if ecode(e) == "400" end
     end
 end
+
+create_lambda(name; kw...) = create_lambda(default_aws_config(), name; kw...)
 
 
 function update_lambda(aws::AWSConfig, name;
@@ -167,6 +177,8 @@ function update_lambda(aws::AWSConfig, name;
     end
 end
 
+update_lambda(name; kw...) = update_lambda(default_aws_config(), name; kw...)
+
 
 function lambda_publish_version(aws::AWSConfig, name, alias)
 
@@ -174,11 +186,14 @@ function lambda_publish_version(aws::AWSConfig, name, alias)
     @protected try
         lambda_create_alias(aws, name, alias, FunctionVersion=r[:Version])
     catch e
-        @ignore if e.code == "409"
+        @ignore if ecode(e) == "409"
             lambda_update_alias(aws, name, alias, FunctionVersion=r[:Version])
         end
     end
 end
+
+lambda_publish_version(name, alias) = 
+    lambda_publish_version(default_aws_config(), name, alias)
 
 
 function lambda_create_alias(aws::AWSConfig, name, alias;
@@ -188,6 +203,9 @@ function lambda_create_alias(aws::AWSConfig, name, alias;
                         query=@SymDict(FunctionVersion, Name=alias))
 end
 
+lambda_create_alias(name, alias; kw...) = 
+    lambda_create_alias(default_aws_config(), name, alias; kw...)
+
 
 function lambda_update_alias(aws::AWSConfig, name, alias;
                              FunctionVersion="\$LATEST")
@@ -196,17 +214,27 @@ function lambda_update_alias(aws::AWSConfig, name, alias;
                        query=@SymDict(FunctionVersion))
 end
 
+lambda_update_alias(name, alias; kw...) = 
+    lambda_update_alias(default_aws_config(), name, alias; kw...)
+
 
 function lambda_add_permission(aws::AWSConfig, name, permission)
 
     lambda(aws, "POST", path="$name/policy", query=permission)
 end
 
+lambda_add_permission(name, permission) = 
+    lambda_add_permission(default_aws_config(), name, permission)
+
 
 function lambda_delete_permission(aws::AWSConfig, name, id)
 
     lambda(aws, "DELETE", path="$name/policy/$id")
 end
+
+lambda_delete_permission(name, id) =
+    lambda_delete_permission(default_aws_config(), name, id)
+
 
 function lambda_delete_permissions(aws::AWSConfig, name)
 
@@ -215,6 +243,9 @@ function lambda_delete_permissions(aws::AWSConfig, name)
     end
 end
 
+lambda_delete_permissions(name) = 
+    lambda_delete_permissions(default_aws_config(), name)
+
 
 function lambda_get_permissions(aws::AWSConfig, name)
 
@@ -222,11 +253,14 @@ function lambda_get_permissions(aws::AWSConfig, name)
         r = lambda(aws, "GET", path="$name/policy")
         return JSON.parse(r[:Policy])["Statement"]
     catch e
-        @ignore if e.code == "404"
+        @ignore if ecode(e) == "404"
             return Dict[]
         end
     end
 end
+
+lambda_get_permissions(name) = 
+    lambda_get_permissions(default_aws_config(), name)
 
 
 function delete_lambda(aws::AWSConfig, name)
@@ -234,9 +268,11 @@ function delete_lambda(aws::AWSConfig, name)
     @protected try
         lambda(aws, "DELETE", path=name)
     catch e
-        @ignore if e.code == "404" end
+        @ignore if ecode(e) == "404" end
     end
 end
+
+delete_lambda(name) = delete_lambda(default_aws_config(), name)
 
 
 export AWSLambdaException
@@ -254,7 +290,7 @@ function Base.show(io::IO, e::AWSLambdaException)
 end
 
 
-function invoke_lambda(aws::AWSConfig, name, args; async=false)
+function invoke_lambda(aws::AWSConfig, name, args::Dict; async=false)
 
 
     @protected try
@@ -272,7 +308,7 @@ function invoke_lambda(aws::AWSConfig, name, args; async=false)
         return r
 
     catch e
-        if try e.code == "429" catch false end
+        if ecode(e) == "429"
             e.message = e.message *
                 " See http://docs.aws.amazon.com/lambda/latest/dg/limits.html"
         end
@@ -281,15 +317,20 @@ function invoke_lambda(aws::AWSConfig, name, args; async=false)
     @assert false # Unreachable
 end
 
+invoke_lambda(name, args::Dict; kw...) = invoke_lambda(default_aws_config(),
+                                                       name, args; kw...)
 
-function invoke_lambda(aws::AWSConfig, name; args...)
-    return invoke_lambda(aws, name, symboldict(args))
-end
+invoke_lambda(aws::AWSConfig, name; args...) = 
+    invoke_lambda(aws, name, symboldict(args))
+
+invoke_lambda(name; args...) = 
+    invoke_lambda(default_aws_config(), name; args...)
 
 
-function async_lambda(aws::AWSConfig, name, args)
-    return invoke_lambda(aws, name, args; async=true)
-end
+async_lambda(aws::AWSConfig, name, args) = 
+    invoke_lambda(aws, name, args; async=true)
+
+async_lambda(name, args) = async_lambda(default_aws_config(), name, args)
 
 
 function create_lambda_role(aws::AWSConfig, name, policy="")
@@ -313,7 +354,7 @@ function create_lambda_role(aws::AWSConfig, name, policy="")
                         }""")
 
     catch e
-        @ignore if e.code == "EntityAlreadyExists" end
+        @ignore if ecode(e) == "EntityAlreadyExists" end
     end
 
     AWSIAM.iam(aws, Action = "AttachRolePolicy",
@@ -332,6 +373,7 @@ function create_lambda_role(aws::AWSConfig, name, policy="")
 end
 
 
+
 #-------------------------------------------------------------------------------
 # Python Code Support.
 #-------------------------------------------------------------------------------
@@ -340,7 +382,7 @@ end
 function create_py_lambda(aws::AWSConfig, name, py_code;
                           Role = create_lambda_role(aws, name))
 
-    options = @SymDict(Role, ZipFile = create_zip("lambda_main.py" => py_code))
+    options = @SymDict(Role, ZipFile = create_zip("lambda_function.py" => py_code))
 
     old_config = lambda_configuration(aws, name)
 
@@ -350,6 +392,10 @@ function create_py_lambda(aws::AWSConfig, name, py_code;
         update_lambda(aws, name; options...)
     end
 end
+
+create_py_lambda(name, py_code; kw...) =
+    create_py_lambda(default_aws_config(), name, py_code; kw...)
+
 
 
 #-------------------------------------------------------------------------------
@@ -365,18 +411,16 @@ function serialize64(x)
     b64 = Base64EncodePipe(buf)
     serialize(b64, x)
     close(b64)
-    takebuf_string(buf)
+    String(take!(buf))
 end
 
 
 # Invoke a Julia AWS Lambda function.
 # Serialise "args" and deserialise result.
 
-function invoke_jl_lambda(aws::AWSConfig, name, args...;
-                          jl_modules=Symbol[])
+function invoke_jl_lambda(aws::AWSConfig, name::String, args...)
 
-    r = invoke_lambda(aws, name, jl_modules = jl_modules,
-                                 jl_data = serialize64(args))
+    r = invoke_lambda(aws, name, jl_data = serialize64(args))
     try
         println(r[:stdout])
     end
@@ -386,55 +430,102 @@ function invoke_jl_lambda(aws::AWSConfig, name, args...;
     return r
 end
 
+invoke_jl_lambda(name::String, args...) = 
+    invoke_jl_lambda(default_aws_config(), name, args...)
+
 
 # Returns an anonymous function that calls "func" in the Lambda sandbox.
-# e.g. @lambda_call(aws, println)("Hello")
-#      @lambda_call(aws, x -> x*x)(4)
-#      @lambda_call(aws, [:JSON], s -> JSON.parse(s))("{}")
+# e.g. lambda_function(println)("Hello")
+#      lambda_function(x -> x*x)(4)
+#      lambda_function(s -> JSON.parse(s))("{}")
 
-macro lambda_call(aws, args...)
+lambda_function(aws, f) =
+    (a...) -> invoke_jl_lambda(aws, "jl_lambda_eval:$jl_version",
+                                    eval(Main,:(()->$f($a...))))
 
-    @assert length(args) <= 2
-    func = Expr(:quote, args[end])
-    modules = length(args) > 1 ? eval(args[1]) : Symbol[]
-    @assert isa(modules, Vector{Symbol})
-    #name = "jl_lambda_eval_$jl_version"
-    name = "jl_lambda_eval"
+lambda_function(f) = lambda_function(default_aws_config(), f)
 
-    esc(quote
-        (args...) -> invoke_jl_lambda($aws, $name,
-                                            $func, Any[args...];
-                                            jl_modules = $modules)
-    end)
+macro lambda(aws, f)
+
+    @assert f isa Expr
+    @assert f.head == :function
+
+    args = Expr(:tuple, f.args[1].args[2:end]...)
+    body = f.args[2]
+
+    # Split "using module" lines out of body...
+    using_modules = filter(e->isa(e, Expr) && e.head == :using, body.args)
+    modules = Symbol[m.args[1] for m in using_modules]
+    body.args = filter(e->!isa(e, Expr) || e.head != :using, body.args)
+
+    if length(modules) > 0
+        # Build expression to install modules under "/tmp"...
+        load_path, mod_files = module_files(eval(aws), modules)
+        body = quote 
+            for (path, code) in $([(k, v) for (k,v) in mod_files])
+                path = "/tmp/$path"
+                println("$path, $(length(code)) bytes")
+                mkpath(dirname(path))
+                write(path, code)
+            end
+            if !("/tmp/julia" in Base.LOAD_CACHE_PATH)
+                splice!(Base.LOAD_CACHE_PATH, 1:0, ["/tmp/julia"])
+            end
+            for dir in ["/tmp/julia/$p" for p in $load_path]
+                if !(dir in Base.LOAD_PATH)
+                    push!(Base.LOAD_PATH, dir)
+                end
+            end
+            for u in $using_modules
+                eval(Main, u)
+            end
+            Base.invokelatest(()->$body)
+        end
+    end
+
+    # Replace function body with Lambda invocation...
+    f.args[2] = :(lambda_function($aws, $args->$body)($args...))
+
+    esc(f)
+end
+
+macro lambda(f)
+    esc(:(@lambda(AWSCore.default_aws_config(), $f)))
 end
 
 
 # Evaluate "expr" in the Lambda sandbox.
 
-macro lambda_eval(aws, args...)
+lambda_eval(aws, expr) = 
+    invoke_jl_lambda(aws, "jl_lambda_eval:$jl_version", expr)
 
-    @assert length(args) <= 2
-    expr = args[end]
-    modules = length(args) > 1 ? eval(args[1]) : Symbol[]
-    @assert isa(modules, Vector{Symbol})
+lambda_eval(expr) = lambda_eval(default_aws_config(), expr)
 
-    esc(quote @lambda_call($aws,$modules,()->$expr)() end)
+macro lambda_eval(expr)
+    if expr.head == :block
+        expr = [e for e in expr.args]
+    else
+        expr = QuoteNode(expr)
+    end
+    :(lambda_eval($expr))
 end
 
 
 # Evaluate "code" in the Lambda sandbox.
 
-function lambda_include_string(aws::AWSConfig, code)
-    @lambda_call(aws, include_string)(code)
-end
+lambda_include_string(aws, code) = lambda_function(aws, include_string)(code)
+
+lambda_include_string(code) = lambda_include_string(default_aws_config(), code)
 
 
 # Evaluate "filename" in the Lambda sandbox.
 
 function lambda_include(aws::AWSConfig, filename)
     code = readstring(filename)
-    @lambda_call(aws, include_string)(code, filename)
+    lambda_function(aws, include_string)(code, filename)
 end
+
+lambda_include(filename) = lambda_include(default_aws_config(), filename)
 
 
 # Create an AWS Lambda to run "jl_code".
@@ -507,7 +598,7 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
 
     options[:Description] = new_code_hash
 
-    deploy_lambda = @lambda_call(aws,
+    deploy_lambda = lambda_function(aws,
         [:AWSLambda, :AWSS3, :InfoZIP],
         (aws, name, load_path, options, is_new) -> begin
 
@@ -567,12 +658,16 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
     deploy_lambda(aws, name, load_path, options, old_config == nothing)
 end
 
+create_jl_lambda(name::String, jl_code, modules=Symbol[], options=SymDict()) =
+    create_jl_lambda(default_aws_config(), name, jl_code, modules, options)
+
+
 
 # Create an AWS Lambda function.
 #
 # e.g.
 #
-#   f = @lambda aws function hello(a, b)
+#   @lambda aws function hello(a, b)
 #
 #       message = "Hello $a$b"
 #
@@ -581,19 +676,19 @@ end
 #       return message
 #   end
 #
-#   f("World", "!")
+#   hello("World", "!")
 #   Hello World!
 #
 # @lambda deploys an AWS Lambda that contains the body of the Julia function.
 # It then rewrites the local Julia function to call invocke_lambda().
 
-macro lambda(args...)
+macro oldlambda(args...)
 
-    usage = "usage: @lambda aws [options::SymDict] function..."
+    usage = "usage: @lambda [aws [options::SymDict]] function..."
 
     @assert length(args) <= 3 usage
 
-    aws = args[1]
+    aws = length(args) > 1 ? args[1] : :(default_aws_config())
 
     f = args[end]
     @assert isa(f, Expr) usage
@@ -601,7 +696,7 @@ macro lambda(args...)
 
     options = length(args) > 2 ? esc(args[2]) : :(Dict())
 
-    # Rewrite function name to be :lambda...
+    # Rewrite function name to be :lambda_function...
     call, body = f.args
     name = call.args[1]
     call.args[1] = :lambda_function
@@ -634,26 +729,14 @@ macro lambda(args...)
         end
         """
 
-    # Add "aws" dict as first arg...
-    insert!(f.args[1].args, 2, :aws)
-
     # Replace function body with Lambda invocation...
-    f.args[2] = :(invoke_jl_lambda(aws, $name, $(args...)))
-
-
-    call.args[1] = name
+    f.args[2] = :(invoke_jl_lambda($name, $(args...)))
 
     quote
         create_jl_lambda($(esc(aws)),
                          $(string(name)), $jl_code, $modules, $options)
         $(esc(f))
-        $(Expr(:tuple, args...)) -> $(esc(name))($(esc(aws)), $(args...))
     end
-end
-
-
-macro λ(args...)
-    esc(:(@lambda $(args...)))
 end
 
 
@@ -679,9 +762,18 @@ end
 
 # List of modules in the Lambda sandbox ".ji" cache.
 
-function lambda_module_cache(aws::AWSConfig)
+function lambda_module_cache(aws::AWSConfig = default_aws_config())
 
-    @lambda_call(aws, [:AWSLambda], AWSLambda.local_module_cache)()
+    lambda_eval(aws, :(filter(x->Main.eval(:(
+        try
+            isa($x, Module) && !isfile(string("/tmp/julia/", $x, ".ji"))
+        catch ex
+            if typeof(ex) != UndefVarError
+                rethrow(ex)
+            end
+            false
+        end
+    )), names(Main))))
 end
 
 
@@ -784,15 +876,18 @@ function module_files(aws::AWSConfig, modules::Vector{Symbol})
 
 
     # Remove common prefix from load path locations...
-    load_path = collect(filter(p->p != pkgd, keys(d)))
+    load_path = collect(Base.Iterators.filter(p->p != pkgd, keys(d)))
     prefix, short_load_path = path_prefix_split(load_path)
+    push!(short_load_path, basename(pkgd))
 
     # Build archive of file content...
     archive = OrderedDict()
     for (p, s) in zip([load_path...; pkgd],
                       [short_load_path...; basename(pkgd)])
         for f in get(d,p,[])
-            archive[joinpath("julia", s, f)] = read(joinpath(p, f))
+            path = joinpath("julia", s, f)
+            path = replace(path, "\\", "/")
+            archive[path] = read(joinpath(p, f))
         end
     end
 
@@ -804,144 +899,26 @@ end
 # Deploy pre-cooked Julia Base Lambda
 #-------------------------------------------------------------------------------
 
-const base_zip = "jl_lambda_base_$(VERSION)_$(aws_lamabda_jl_version).zip"
+function deploy_jl_lambda_base(aws::AWSConfig = default_aws_config())
 
-function deploy_jl_lambda_base(aws::AWSConfig)
+    bucket = "octech.com.au.$(aws[:region]).awslambda.jl.deploy"
+    base_zip = "jl_lambda_base_$(VERSION)_$(aws_lamabda_jl_version).zip"
 
-    #create_lambda(aws, "jl_lambda_eval_$jl_version";
-    create_lambda(aws, "jl_lambda_eval";
-                  S3Key=base_zip,
-                  S3Bucket="octech.com.au.$(aws[:region]).awslambda.jl.deploy",
-                  Role = create_lambda_role(aws, "jl_lambda_eval"))
-end
+    old_config = lambda_configuration(aws, "jl_lambda_eval")
 
-function deploy_jl_lambda_base_to_s3(aws::AWSConfig)
+    options = @SymDict(S3Key=base_zip,
+                       S3Bucket=bucket,
+                       Role = create_lambda_role(aws, "jl_lambda_eval"))
 
-    source_bucket = "octech.com.au.ap-southeast-2.awslambda.jl.deploy"
-
-    # Upload base zip to source bucket...
-
-    AWSS3.s3(aws, "PUT", source_bucket;
-             path = base_zip,
-             headers = Dict("x-amz-acl" => "public-read"),
-             content = read(joinpath(Pkg.dir("AWSLambda"),
-                                     "docker/jl_lambda_base.$VERSION.zip")))
-
-
-    lambda_regions = ["us-east-1",
-                      "us-east-2",
-                      "us-west-1",
-                      "us-west-2",
-                      "ap-northeast-2",
-                      "ap-south-1",
-                      "ap-southeast-1",
-                      "ap-northeast-1",
-                      "eu-central-1",
-                      "eu-west-1",
-                      "eu-west-2"]
-
-    # Deploy to other regions...
-    @sync for r in lambda_regions
-
-        raws = merge(aws, Dict(:region => r))
-        bucket = "octech.com.au.$r.awslambda.jl.deploy"
-
-        @async begin
-
-            s3_create_bucket(raws, bucket)
-
-            AWSS3.s3(aws, "PUT", bucket;
-                     path = base_zip,
-                     headers = Dict(
-                         "x-amz-copy-source" => "$source_bucket/$base_zip",
-                         "x-amz-acl" => "public-read"))
-        end
-    end
-end
-
-
-
-#-------------------------------------------------------------------------------
-# API Gateway support http://docs.aws.amazon.com/apigateway/
-#-------------------------------------------------------------------------------
-
-hallink(hal, name) = hal["_links"][name]["href"]
-
-
-#function apigateway(aws::AWSConfig, verb, resource; args...)
-#    apigateway(aws, verb, resource, Dict(args))
-#end
-
-
-function apigateway(aws::AWSConfig, verb, resource="/restapis", query=Dict())
-
-    r = @SymDict(
-        service  = "apigateway",
-        url      = AWSCore.aws_endpoint("apigateway", aws[:region]) * resource,
-        content  = isempty(query) ? "" : json(query),
-        headers  = Dict(),
-        resource,
-        verb,
-        aws...
-    )
-
-    r = AWSCore.do_request(r)
-
-    return r
-end
-
-
-function apigateway_restapis(aws::AWSConfig)
-    r = apigateway(aws, "GET", "/restapis")
-    if haskey(r, "_embedded")
-        r = r["_embedded"]
-        r = get(r, "item", r)
-        if !isa(r, Vector)
-            r = [r]
-        end
+    if old_config == nothing
+        create_lambda(aws, "jl_lambda_eval"; options...)
     else
-        r = []
+        update_lambda(aws, "jl_lambda_eval"; options...)
     end
-    return r
+
+    lambda_publish_version(aws, "jl_lambda_eval", jl_version)
 end
 
-
-function apigateway_lambda_arn(aws::AWSConfig, name)
-    name = arn(aws, "lambda", "function:$name")
-    f = "/2015-03-31/functions/$name/invocations"
-    "arn:aws:apigateway:$(aws[:region]):lambda:path$f"
-end
-
-
-function apigateway_create(aws::AWSConfig, name, args)
-
-    lambda_arn = apigateway_lambda_arn(aws, name)
-    api = apigateway(aws, "POST", "/restapis", name = name)
-    id = api["id"]
-    method = "$(hallink(api, "resource:create"))/methods/GET"
-    params = Dict(Pair["method.request.querystring.$a" => false for a in args])
-    map = "{\n$(join(["\"$a\" : \$input.params(\"$a\")" for a in args], ",\n"))\n}"
-
-    apigateway(aws, "PUT", method,
-               authorizationType = "NONE",
-               requestParameters = params)
-
-    apigateway(aws, "PUT", "$method/responses/200",
-               "responseModels" => Dict("application/json" => "Empty"))
-
-    apigateway(aws, "PUT", "$method/integration/", Dict(
-               "type" => "AWS", "httpMethod" => "POST", "uri" => lambda_arn,
-               "requestTemplates" => Dict("application/json" => map)))
-
-    apigateway(aws, "PUT", "$method/integration/responses/200",
-               responseTemplates = Dict("application/json" => nothing))
-
-    lambda(aws, "POST"; path="$name/policy", query=Dict(
-           "Action" => "lambda:InvokeFunction",
-           "Principal" => "apigateway.amazonaws.com",
-           "SourceArn" => arn(aws, "execute-api", "$id/*/GET/"),
-           "StatementId" => "apigateway_$(id)_GET"))
-end
 
 
 end # module AWSLambda
