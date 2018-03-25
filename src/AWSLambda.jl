@@ -55,23 +55,16 @@ const aws_lamabda_jl_version = "0.3.0"
 #-------------------------------------------------------------------------------
 
 
-function lambda(aws::AWSConfig, verb; path="", query="", headers = Dict())
+function lambda(aws::AWSConfig, verb; path="", query=Dict(), headers=Dict())
+
+    aws = copy(aws)
+    aws[:ordered_json_dict] = false
 
     resource = HTTP.escapepath("/2015-03-31/functions/$path")
 
-    r = @SymDict(
-        service  = "lambda",
-        ordered_json_dict = false,
-        content  = query == "" ? "" : json(query),
-        headers,
-        resource,
-        verb,
-        aws...
-    )
+    query[:headers] = headers
 
-    r[:url] = AWSCore.service_url(aws, r)
-
-    r = AWSCore.do_request(r)
+    r = AWSCore.Services.lambda(aws, verb, resource, query)
 
     if isa(r, Dict)
         r = symboldict(r)
@@ -270,6 +263,8 @@ function delete_lambda(aws::AWSConfig, name)
     catch e
         @ignore if ecode(e) == "404" end
     end
+
+    return
 end
 
 delete_lambda(name) = delete_lambda(default_aws_config(), name)
