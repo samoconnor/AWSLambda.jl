@@ -254,6 +254,16 @@ end
 
 @test invoke_jl_lambda("count_primes_fast", 10, 100) == 21
 
+mktempdir() do tmp
+    cd(tmp) do
+        run(`aws lambda invoke --function-name count_primes_fast
+                               --payload "{\"low\": 10, \"high\": 100}"
+                               output.txt`)
+        r = JSON.parse(JSON.parse(readstring("output.txt"))["jl_data"])
+
+        @test r == 21
+    end
+end
 
 
 #==============================================================================#
