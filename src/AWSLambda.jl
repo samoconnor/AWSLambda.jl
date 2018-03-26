@@ -8,6 +8,22 @@
 # Copyright OC Technology Pty Ltd 2014 - All rights reserved
 #==============================================================================#
 
+#=
+TODO
+
+ - Test on windows.
+
+
+TODO later:
+
+ - can bindeps be deployed easily from BinaryBuilder/Linux??
+
+ - deprecate exported names
+
+ - rename to be used unexported. e.g. AWSLambda.create
+=#
+
+
 #FIXME https://github.com/awslabs/serverless-application-model
 #FIXME https://github.com/awslabs/aws-sam-local
 #FIXME DLQ
@@ -22,7 +38,7 @@ module AWSLambda
 
 export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        async_lambda, create_jl_lambda, invoke_jl_lambda,
-       @lambda, lambda_add_permission, lambda_get_permissions,
+       @lambda, @deploy_lambda, lambda_add_permission, lambda_get_permissions,
        lambda_delete_permission, lambda_delete_permissions,
        create_py_lambda,
        deploy_jl_lambda_base,
@@ -44,6 +60,7 @@ using Glob
 using FNVHash
 using Base.Pkg
 using HTTP
+import HTTP: @require, precondition_error
 
 const jl_version = "JL_$(replace(string(VERSION), ".", "_"))"
 const aws_lamabda_jl_version = "0.3.0"
@@ -101,7 +118,7 @@ function lambda_update_configuration(aws::AWSConfig, name, options)
     lambda(aws, "PUT", path="$name/configuration", query=options)
 end
 
-lambda_update_configuration(name, options) = 
+lambda_update_configuration(name, options) =
     lambda_update_configuration(default_aws_config(), name, options)
 
 
@@ -185,7 +202,7 @@ function lambda_publish_version(aws::AWSConfig, name, alias)
     end
 end
 
-lambda_publish_version(name, alias) = 
+lambda_publish_version(name, alias) =
     lambda_publish_version(default_aws_config(), name, alias)
 
 
@@ -196,7 +213,7 @@ function lambda_create_alias(aws::AWSConfig, name, alias;
                         query=@SymDict(FunctionVersion, Name=alias))
 end
 
-lambda_create_alias(name, alias; kw...) = 
+lambda_create_alias(name, alias; kw...) =
     lambda_create_alias(default_aws_config(), name, alias; kw...)
 
 
@@ -207,7 +224,7 @@ function lambda_update_alias(aws::AWSConfig, name, alias;
                        query=@SymDict(FunctionVersion))
 end
 
-lambda_update_alias(name, alias; kw...) = 
+lambda_update_alias(name, alias; kw...) =
     lambda_update_alias(default_aws_config(), name, alias; kw...)
 
 
@@ -216,7 +233,7 @@ function lambda_add_permission(aws::AWSConfig, name, permission)
     lambda(aws, "POST", path="$name/policy", query=permission)
 end
 
-lambda_add_permission(name, permission) = 
+lambda_add_permission(name, permission) =
     lambda_add_permission(default_aws_config(), name, permission)
 
 
@@ -236,7 +253,7 @@ function lambda_delete_permissions(aws::AWSConfig, name)
     end
 end
 
-lambda_delete_permissions(name) = 
+lambda_delete_permissions(name) =
     lambda_delete_permissions(default_aws_config(), name)
 
 
@@ -252,7 +269,7 @@ function lambda_get_permissions(aws::AWSConfig, name)
     end
 end
 
-lambda_get_permissions(name) = 
+lambda_get_permissions(name) =
     lambda_get_permissions(default_aws_config(), name)
 
 
@@ -315,14 +332,14 @@ end
 invoke_lambda(name, args::Dict; kw...) = invoke_lambda(default_aws_config(),
                                                        name, args; kw...)
 
-invoke_lambda(aws::AWSConfig, name; args...) = 
+invoke_lambda(aws::AWSConfig, name; args...) =
     invoke_lambda(aws, name, symboldict(args))
 
-invoke_lambda(name; args...) = 
+invoke_lambda(name; args...) =
     invoke_lambda(default_aws_config(), name; args...)
 
 
-async_lambda(aws::AWSConfig, name, args) = 
+async_lambda(aws::AWSConfig, name, args) =
     invoke_lambda(aws, name, args; async=true)
 
 async_lambda(name, args) = async_lambda(default_aws_config(), name, args)
@@ -394,345 +411,8 @@ create_py_lambda(name, py_code; kw...) =
 
 
 #-------------------------------------------------------------------------------
-# Julia Code Support.
+# Julia Modules.
 #-------------------------------------------------------------------------------
-
-
-# Base64 representation of Julia objects...
-
-function serialize64(x)
-
-    buf = IOBuffer()
-    b64 = Base64EncodePipe(buf)
-    serialize(b64, x)
-    close(b64)
-    String(take!(buf))
-end
-
-
-# Invoke a Julia AWS Lambda function.
-# Serialise "args" and deserialise result.
-
-function invoke_jl_lambda(aws::AWSConfig, name::String, args...)
-
-    r = invoke_lambda(aws, name, jl_data = serialize64(args))
-    try
-        println(r[:stdout])
-    end
-    try
-        return deserialize(Base64DecodePipe(IOBuffer(r[:jl_data])))
-    end
-    return r
-end
-
-invoke_jl_lambda(name::String, args...) = 
-    invoke_jl_lambda(default_aws_config(), name, args...)
-
-
-# Returns an anonymous function that calls "func" in the Lambda sandbox.
-# e.g. lambda_function(println)("Hello")
-#      lambda_function(x -> x*x)(4)
-#      lambda_function(s -> JSON.parse(s))("{}")
-
-lambda_function(aws, f) =
-    (a...) -> invoke_jl_lambda(aws, "jl_lambda_eval:$jl_version",
-                                    eval(Main,:(()->$f($a...))))
-
-lambda_function(f) = lambda_function(default_aws_config(), f)
-
-macro lambda(aws, f)
-
-    @assert f isa Expr
-    @assert f.head == :function
-
-    args = Expr(:tuple, f.args[1].args[2:end]...)
-    body = f.args[2]
-
-    # Split "using module" lines out of body...
-    using_modules = filter(e->isa(e, Expr) && e.head == :using, body.args)
-    modules = Symbol[m.args[1] for m in using_modules]
-    body.args = filter(e->!isa(e, Expr) || e.head != :using, body.args)
-
-    if length(modules) > 0
-        # Build expression to install modules under "/tmp"...
-        load_path, mod_files = module_files(eval(aws), modules)
-        body = quote 
-            for (path, code) in $([(k, v) for (k,v) in mod_files])
-                path = "/tmp/$path"
-                println("$path, $(length(code)) bytes")
-                mkpath(dirname(path))
-                write(path, code)
-            end
-            if !("/tmp/julia" in Base.LOAD_CACHE_PATH)
-                splice!(Base.LOAD_CACHE_PATH, 1:0, ["/tmp/julia"])
-            end
-            for dir in ["/tmp/julia/$p" for p in $load_path]
-                if !(dir in Base.LOAD_PATH)
-                    push!(Base.LOAD_PATH, dir)
-                end
-            end
-            for u in $using_modules
-                eval(Main, u)
-            end
-            Base.invokelatest(()->$body)
-        end
-    end
-
-    # Replace function body with Lambda invocation...
-    f.args[2] = :(lambda_function($aws, $args->$body)($args...))
-
-    esc(f)
-end
-
-macro lambda(f)
-    esc(:(@lambda(AWSCore.default_aws_config(), $f)))
-end
-
-
-# Evaluate "expr" in the Lambda sandbox.
-
-lambda_eval(aws, expr) = 
-    invoke_jl_lambda(aws, "jl_lambda_eval:$jl_version", expr)
-
-lambda_eval(expr) = lambda_eval(default_aws_config(), expr)
-
-macro lambda_eval(expr)
-    if expr.head == :block
-        expr = [e for e in expr.args]
-    else
-        expr = QuoteNode(expr)
-    end
-    :(lambda_eval($expr))
-end
-
-
-# Evaluate "code" in the Lambda sandbox.
-
-lambda_include_string(aws, code) = lambda_function(aws, include_string)(code)
-
-lambda_include_string(code) = lambda_include_string(default_aws_config(), code)
-
-
-# Evaluate "filename" in the Lambda sandbox.
-
-function lambda_include(aws::AWSConfig, filename)
-    code = readstring(filename)
-    lambda_function(aws, include_string)(code, filename)
-end
-
-lambda_include(filename) = lambda_include(default_aws_config(), filename)
-
-
-# Create an AWS Lambda to run "jl_code".
-
-function create_jl_lambda(aws::AWSConfig, name, jl_code,
-                          modules=Symbol[], options=SymDict())
-
-    options = copy(options)
-
-    # Find files and load path for required modules...
-    load_path, mod_files = module_files(aws, modules)
-    full_load_path = join([":/var/task/julia/$p" for p in load_path])
-    py_config = ["os.environ['JULIA_LOAD_PATH'] += '$full_load_path'\n"]
-
-    if AWSCore.debug_level > 0
-        println("create_jl_lambda($name)")
-        for f in keys(mod_files)
-            println("    $f")
-        end
-    end
-
-    # Get env vars from "aws" or "options"...
-    env = get(options, :env,
-          get(aws, :lambda_env, Dict()))
-    options[:env] = env
-    for (n,v) in env
-        push!(py_config, "os.environ['$n'] = '$v'\n")
-    end
-
-    # Get error topic from "aws" or "options"...
-    error_sns_arn = get(options, :error_sns_arn,
-                    get(aws, :lambda_error_sns_arn, ""))
-    push!(py_config, "error_sns_arn = '$error_sns_arn'\n")
-
-    # Get DLQ topic from "aws" if not already in "options"...
-    if !haskey(options, :DeadLetterConfig) &&
-        haskey(aws, :lambda_error_sns_arn)
-
-        options[:DeadLetterConfig] = Dict(:TargetArn =>
-                                          aws[:lambda_dlq_sns_arn])
-    end
-
-    # Start with ZipFile from options...
-    if !haskey(options, :ZipFile)
-        options[:ZipFile] = UInt8[]
-    end
-
-    if AWSCore.debug_level > 1
-        @show py_config
-    end
-
-    # Add lambda source and module files to zip...
-    open_zip(options[:ZipFile]) do z
-        merge!(z, mod_files)
-        z["lambda_config.py"] = join(py_config)
-        z["module_$name.jl"] = jl_code
-    end
-
-    # FNV hash of deployed Julia code is stored in the Description field.
-    old_config = lambda_configuration(aws, name)
-    new_code_hash = options[:ZipFile] |> open_zip |> Dict |>
-                    serialize64 |> fnv32 |> hex
-    old_code_hash = old_config == nothing ? nothing :
-                    get(old_config, :Description, nothing)
-
-    # Don't create a new lambda if one already exists with same code...
-    if new_code_hash == old_code_hash && !get(aws, :lambda_force_update, false)
-        return
-    end
-
-    options[:Description] = new_code_hash
-
-    deploy_lambda = lambda_function(aws,
-        [:AWSLambda, :AWSS3, :InfoZIP],
-        (aws, name, load_path, options, is_new) -> begin
-
-            AWSCore.set_debug_level(1)
-
-            # Unzip lambda source and modules files to /tmp...
-            mktempdir() do tmpdir
-
-                for (n, v) in options[:env]
-                    ENV[n] = replace(v, r"^/var/task", tmpdir)
-                end
-
-                if haskey(options, :ZipURL)
-                    InfoZIP.unzip(Requests.get(options[:ZipURL]).data, tmpdir)
-                end
-
-                InfoZIP.unzip(options[:ZipFile], tmpdir)
-                #run(`ls -la / $tmpdir`)
-
-                # Create module precompilation directory under /tmp...
-                ji_path = Base.LOAD_CACHE_PATH[1]
-                ji_path = replace(ji_path, "/var/task", tmpdir, 1)
-                mkpath(ji_path)
-
-                # Run precompilation...
-                cmd = "push!(LOAD_PATH, \"$tmpdir\")\n"
-                v = "v$(VERSION.major).$(VERSION.minor)"
-                cmd *= "push!(LOAD_PATH, \"$tmpdir/julia/$v\")\n"
-                for p in load_path
-                    cmd *= "push!(LOAD_PATH, \"$tmpdir/julia/$p\")\n"
-                end
-                cmd *= "insert!(Base.LOAD_CACHE_PATH, 1, \"$ji_path\")\n"
-                cmd *= "using module_$name\n"
-                println(cmd)
-                run(`$JULIA_HOME/julia -e $cmd`)
-                run(`chmod -R a+r $ji_path`)
-
-                # Create new ZIP combining base image and new files from /tmp...
-                run(`rm -f /tmp/lambda.zip`)
-                run(Cmd(`zip -q --symlinks -r -9 /tmp/lambda.zip .`,
-                        dir="/var/task"))
-                run(Cmd(`zip -q --symlinks -r -9 /tmp/lambda.zip .`,
-                        dir=tmpdir))
-                options[:ZipFile] = read("/tmp/lambda.zip")
-
-                run(`rm -f /tmp/lambda.zip`)
-            end
-
-            # Deploy the lambda to AWS...
-            if is_new
-                r = create_lambda(aws, name; options...)
-            else
-                r = update_lambda(aws, name; options...)
-            end
-        end)
-
-    deploy_lambda(aws, name, load_path, options, old_config == nothing)
-end
-
-create_jl_lambda(name::String, jl_code, modules=Symbol[], options=SymDict()) =
-    create_jl_lambda(default_aws_config(), name, jl_code, modules, options)
-
-
-
-# Create an AWS Lambda function.
-#
-# e.g.
-#
-#   @lambda aws function hello(a, b)
-#
-#       message = "Hello $a$b"
-#
-#       println("Log: $message")
-#
-#       return message
-#   end
-#
-#   hello("World", "!")
-#   Hello World!
-#
-# @lambda deploys an AWS Lambda that contains the body of the Julia function.
-# It then rewrites the local Julia function to call invocke_lambda().
-
-macro oldlambda(args...)
-
-    usage = "usage: @lambda [aws [options::SymDict]] function..."
-
-    @assert length(args) <= 3 usage
-
-    aws = length(args) > 1 ? args[1] : :(default_aws_config())
-
-    f = args[end]
-    @assert isa(f, Expr) usage
-    @assert f.head == :function usage
-
-    options = length(args) > 2 ? esc(args[2]) : :(Dict())
-
-    # Rewrite function name to be :lambda_function...
-    call, body = f.args
-    name = call.args[1]
-    call.args[1] = :lambda_function
-    args = call.args[2:end]
-
-    # Split "using module" lines out of body...
-    modules = filter(e->isa(e, Expr) && e.head == :using, body.args)
-    modules = Symbol[m.args[1] for m in modules]
-    body.args = filter(e->!isa(e, Expr) || e.head != :using, body.args)
-
-    # Generate code to extract args from event Dict...
-    arg_names = [isa(a, Expr) ? a.args[1] : a for a in args]
-    get_args = join(["""event["$a"]""" for a in arg_names], ", ")
-
-    jl_code = """
-        __precompile__()
-
-        module module_$name
-
-        $(join(["using $m" for m in modules], "\n"))
-
-        function $call
-            $body
-        end
-
-        function lambda_function_with_event(event::Dict{String,Any})
-            lambda_function($get_args)
-        end
-
-        end
-        """
-
-    # Replace function body with Lambda invocation...
-    f.args[2] = :(invoke_jl_lambda($name, $(args...)))
-
-    quote
-        create_jl_lambda($(esc(aws)),
-                         $(string(name)), $jl_code, $modules, $options)
-        $(esc(f))
-    end
-end
 
 
 function local_module_cache()
@@ -888,6 +568,396 @@ function module_files(aws::AWSConfig, modules::Vector{Symbol})
 
     return short_load_path, archive
 end
+
+
+
+#-------------------------------------------------------------------------------
+# Julia Code Support.
+#-------------------------------------------------------------------------------
+
+
+# Base64 representation of Julia objects...
+
+function serialize64(x)
+
+    buf = IOBuffer()
+    b64 = Base64EncodePipe(buf)
+    serialize(b64, x)
+    close(b64)
+    String(take!(buf))
+end
+
+
+# Invoke a Julia AWS Lambda function.
+# Serialise "args" and deserialise result.
+
+function invoke_jl_lambda(aws::AWSConfig, name::String, args...)
+
+    r = invoke_lambda(aws, name, jl_data = serialize64(args))
+    try
+        println(r[:stdout])
+    end
+    try
+        return deserialize(Base64DecodePipe(IOBuffer(r[:jl_data])))
+    end
+    return r
+end
+
+invoke_jl_lambda(name::String, args...) =
+    invoke_jl_lambda(default_aws_config(), name, args...)
+
+
+# Returns an anonymous function that calls "func" in the Lambda sandbox.
+# e.g. lambda_function(println)("Hello")
+#      lambda_function(x -> x*x)(4)
+#      lambda_function(s -> JSON.parse(s))("{}")
+
+lambda_function(aws, f) =
+    (a...) -> invoke_jl_lambda(aws, "jl_lambda_eval:$jl_version",
+                                    eval(Main,:(()->$f($a...))))
+
+lambda_function(f) = lambda_function(default_aws_config(), f)
+
+
+# Prepend `body` with expression to install `modules` under "/tmp"...
+function embed_modules_in_body(aws, body, modules)
+
+    load_path, mod_files = module_files(aws, modules)
+    quote
+        for (path, code) in $([(k, v) for (k,v) in mod_files])
+            path = "/tmp/$path"
+            println("$path, $(length(code)) bytes")
+            mkpath(dirname(path))
+            write(path, code)
+        end
+        if !("/tmp/julia" in Base.LOAD_CACHE_PATH)
+            insert!(Base.LOAD_CACHE_PATH, 1, "/tmp/julia")
+        end
+        for dir in ["/tmp/julia/$p" for p in $load_path]
+            if !(dir in Base.LOAD_PATH)
+                push!(Base.LOAD_PATH, dir)
+            end
+        end
+        for u in $modules
+            eval(Main, :(using $u))
+        end
+        Base.invokelatest(()->$body)
+    end
+end
+
+
+"""
+    @lambda [using ...] function name(args...) body end [aws_config]
+
+Define local `function` that executes `body` on AWS Lambda.
+"""
+macro lambda(args...)
+
+    @require 1 <= length(args) <= 3
+    @require all(x-> x isa Expr, args[1:end-1])
+    @require args[1].head in (:using, :toplevel, :function)
+    @require args[1].head != :toplevel || all(x->x.head == :using, args[1].args)
+    @require args[1].head == :function || length(args) > 1 &&
+                                          args[2].head == :function
+
+    # Optional last argument is AWSConfig.
+    if !(args[end] isa Expr) || args[end].head != :function
+        aws = args[end]
+    else
+        aws = :(Main.AWSCore.default_aws_config())
+    end
+
+    if args[1].head == :function
+        f = args[1]
+        body = f.args[2]
+        modules = Symbol[]
+    else
+        # Optional first argument is `using Foo, Bar, ...`
+        f = args[2]
+        modules = args[1]
+        if modules.head == :using
+            modules = Expr(:toplevel, modules)
+        end
+        @assert modules.head == :toplevel
+        modules = [x.args[1] for x in modules.args]
+        body = f.args[2]
+        body = embed_modules_in_body(eval(aws), body, modules)
+        #FIXME this does not work with sysimg precompilation
+    end
+
+    # Replace function body with Lambda invocation.
+    args = f.args[1].args[2:end]
+    arg_names = [isa(a, Expr) ? a.args[1] : a for a in args]
+    l = Expr(:quote, Expr(:->, Expr(:tuple, args...), body))
+    f.args[2] = :(lambda_function($aws, eval(Main, $l))($(arg_names...)))
+
+    return esc(f)
+end
+
+
+# Evaluate "expr" in the Lambda sandbox.
+
+lambda_eval(aws, expr) =
+    invoke_jl_lambda(aws, "jl_lambda_eval:$jl_version", expr)
+
+lambda_eval(expr) = lambda_eval(default_aws_config(), expr)
+
+macro lambda_eval(expr)
+    if expr.head == :block
+        expr = [e for e in expr.args]
+    else
+        expr = QuoteNode(expr)
+    end
+    :(lambda_eval($expr))
+end
+
+
+# Evaluate "code" in the Lambda sandbox.
+
+lambda_include_string(aws, code) = lambda_function(aws, include_string)(code)
+
+lambda_include_string(code) = lambda_include_string(default_aws_config(), code)
+
+
+# Evaluate "filename" in the Lambda sandbox.
+
+function lambda_include(aws::AWSConfig, filename)
+    code = readstring(filename)
+    lambda_function(aws, include_string)(code, filename)
+end
+
+lambda_include(filename) = lambda_include(default_aws_config(), filename)
+
+
+# Create an AWS Lambda to run "jl_code".
+
+function create_jl_lambda(aws::AWSConfig, name, jl_code,
+                          modules=Symbol[], options=SymbolDict())
+
+    options = copy(options)
+
+    # Find files and load path for required modules...
+    load_path, mod_files = module_files(aws, modules)
+    full_load_path = join([":/var/task/julia/$p" for p in load_path])
+    py_config = ["os.environ['JULIA_LOAD_PATH'] += '$full_load_path'\n"]
+
+@show full_load_path
+@show py_config
+
+    if AWSCore.debug_level > 0
+        println("create_jl_lambda($name)")
+        for f in keys(mod_files)
+            println("    $f")
+        end
+    end
+
+    # Get env vars from "aws" or "options"...
+    env = get(options, :env,
+          get(aws, :lambda_env, Dict()))
+    options[:env] = env
+    for (n,v) in env
+        push!(py_config, "os.environ['$n'] = '$v'\n")
+    end
+
+    # Get error topic from "aws" or "options"...
+    error_sns_arn = get(options, :error_sns_arn,
+                    get(aws, :lambda_error_sns_arn, ""))
+    push!(py_config, "error_sns_arn = '$error_sns_arn'\n")
+
+    # Get DLQ topic from "aws" if not already in "options"...
+    if !haskey(options, :DeadLetterConfig) &&
+        haskey(aws, :lambda_error_sns_arn)
+
+        options[:DeadLetterConfig] = Dict(:TargetArn =>
+                                          aws[:lambda_dlq_sns_arn])
+    end
+
+    # Start with ZipFile from options...
+    if !haskey(options, :ZipFile)
+        options[:ZipFile] = UInt8[]
+    end
+
+    if AWSCore.debug_level > 1
+        @show py_config
+    end
+
+    # Add lambda source and module files to zip...
+    open_zip(options[:ZipFile]) do z
+        merge!(z, mod_files)
+        z["lambda_config.py"] = join(py_config)
+        z["module_$name.jl"] = jl_code
+    end
+
+    # FNV hash of deployed Julia code is stored in the Description field.
+    old_config = lambda_configuration(aws, name)
+    new_code_hash = options[:ZipFile] |> open_zip |> Dict |>
+                    serialize64 |> fnv32 |> hex
+    old_code_hash = old_config == nothing ? nothing :
+                    get(old_config, :Description, nothing)
+
+    # Don't create a new lambda if one already exists with same code...
+    if new_code_hash == old_code_hash && !get(aws, :lambda_force_update, false)
+        return
+    end
+
+    options[:Description] = new_code_hash
+
+    deploy_lambda(aws, name, load_path, options, old_config == nothing)
+end
+
+create_jl_lambda(name::String, jl_code, modules=Symbol[], options=SymbolDict()) =
+    create_jl_lambda(default_aws_config(), name, jl_code, modules, options)
+
+
+@lambda using AWSLambda, AWSS3, InfoZIP function deploy_lambda(
+                                          aws, name, load_path, options, is_new)
+
+    println("Foo")
+
+    AWSCore.set_debug_level(1)
+
+    # Unzip lambda source and modules files to /tmp...
+    mktempdir() do tmpdir
+
+        for (n, v) in options[:env]
+            ENV[n] = replace(v, r"^/var/task", tmpdir)
+        end
+
+        if haskey(options, :ZipURL)
+            InfoZIP.unzip(Requests.get(options[:ZipURL]).data, tmpdir)
+        end
+
+        InfoZIP.unzip(options[:ZipFile], tmpdir)
+        #run(`ls -laR $tmpdir`)
+
+        # Create module precompilation directory under /tmp...
+        v = "v$(VERSION.major).$(VERSION.minor)"
+        ji_path = "$tmpdir/julia/lib/$v"
+        mkpath(ji_path)
+
+        # Run precompilation...
+        cmd = "push!(LOAD_PATH, \"$tmpdir\")\n"
+#        cmd *= "push!(LOAD_PATH, \"$tmpdir/julia/$v\")\n"
+        for p in load_path
+            cmd *= "push!(LOAD_PATH, \"$tmpdir/julia/$p\")\n"
+        end
+        cmd *= "insert!(Base.LOAD_CACHE_PATH, 1, \"$ji_path\")\n"
+        cmd *= "using module_$name\n"
+        println(cmd)
+        run(`$JULIA_HOME/julia -e $cmd`)
+        run(`chmod -R a+r $ji_path`)
+        #run(`ls -laR $tmpdir`)
+
+        # Create new ZIP combining base image and new files from /tmp...
+        run(`rm -f /tmp/lambda.zip`)
+        run(Cmd(`zip -q --symlinks -r -9 /tmp/lambda.zip .`,
+                dir="/var/task"))
+        run(Cmd(`zip -q --symlinks -r -9 /tmp/lambda.zip .`,
+                dir=tmpdir))
+        options[:ZipFile] = read("/tmp/lambda.zip")
+
+        run(`rm -f /tmp/lambda.zip`)
+    end
+
+    # Deploy the lambda to AWS...
+    if is_new
+        r = create_lambda(aws, name; options...)
+    else
+        r = update_lambda(aws, name; options...)
+    end
+
+end
+
+
+
+
+# Create an AWS Lambda function.
+#
+# e.g.
+#
+#   @deploy_lambda function hello(a, b)
+#
+#       message = "Hello $a$b"
+#
+#       println("Log: $message")
+#
+#       return message
+#   end aws
+#
+#   hello("World", "!") # FIXME invoke lambda
+#   Hello World!
+#
+# @lambda deploys an AWS Lambda that contains the body of the Julia function.
+
+
+"""
+    @deploy_lambda [using ...] function name(args...) body end [aws_config]
+
+Deploy `function` to AWS Lambda.
+"""
+macro deploy_lambda(args...)
+
+    @require 1 <= length(args) <= 3
+    @require all(x-> x isa Expr, args[1:end-1])
+    @require args[1].head in (:using, :toplevel, :function)
+    @require args[1].head != :toplevel || all(x->x.head == :using, args[1].args)
+    @require args[1].head == :function || length(args) > 1 &&
+                                          args[2].head == :function
+
+    # Optional last argument is AWSConfig.
+    if !(args[end] isa Expr) || args[end].head != :function
+        aws = args[end]
+    else
+        aws = :(AWSCore.default_aws_config())
+    end
+
+    if args[1].head == :function
+        f = args[1]
+        body = f.args[2]
+        using_modules = :()
+        modules = Symbol[]
+    else
+        # Optional first argument is `using Foo, Bar, ...`
+        f = args[2]
+        using_modules = args[1]
+        modules = args[1]
+        if modules.head == :using
+            modules = Expr(:toplevel, modules)
+        end
+        @assert modules.head == :toplevel
+        modules = [x.args[1] for x in modules.args]
+        body = f.args[2]
+    end
+
+    # Rewrite function name to be :lambda_function...
+    call, body = f.args
+    name = call.args[1]
+    call.args[1] = :lambda_function
+    args = f.args[1].args[2:end]
+
+    # Generate code to extract args from event Dict...
+    arg_names = [isa(a, Expr) ? a.args[1] : a for a in args]
+    get_args = Expr(:tuple, [:(event[$(string(a))]) for a in arg_names]...)
+
+    jl_code = """
+        __precompile__()
+
+        module $(Symbol("module_$name"))
+
+        $using_modules
+
+        $f
+
+        function lambda_function_with_event(event::Dict{String,Any})
+            lambda_function$get_args
+        end
+
+        end
+        """
+
+    :(create_jl_lambda($(esc(aws)), $(string(name)), $jl_code, $modules))
+end
+
 
 
 #-------------------------------------------------------------------------------

@@ -17,9 +17,8 @@ AWSCore.set_debug_level(1)
 
 
 #-------------------------------------------------------------------------------
-# Lambda tests
+# Lambda tests using base jl_labda_eval function
 #-------------------------------------------------------------------------------
-
 
 f = lambda_function(readstring)
 @test chomp(f(`uname`)) == "Linux"
@@ -32,11 +31,34 @@ f = lambda_function((a::String, b::Int) -> begin
 end)
 @test f("FOO", 2) == "FOOFOO"
 
+module Foo
+
+    import ..AWSLambda
+
+    f = AWSLambda.lambda_function(eval(Main, :((a::String, b::Int) -> begin
+        repeat(a, b)
+    end)))
+
+end
+@test Foo.f("FOO", 2) == "FOOFOO"
+
 @lambda function foo(a::String, b::Int)
     repeat(a, b)
 end
 @test foo("FOO", 2) == "FOOFOO"
 
+@lambda function lreadstring(a)
+    readstring(a)
+end
+@test chomp(lreadstring(`uname`)) == "Linux"
+
+module Foo2
+    using AWSLambda
+    @lambda function foo(a::Cmd)
+        chomp(readstring(a))
+    end
+end
+@test Foo2.foo(`uname`) == "Linux"
 
 @test lambda_eval(quote
         open("/proc/cpuinfo") do io
@@ -121,9 +143,7 @@ end
 
 @test pcount_primes(10, 100000000) == 5761451
                                                                              end
-@lambda function count_primes2(low::Int, high::Int)
-
-    using Primes
+@lambda using Primes function count_primes2(low::Int, high::Int)
 
     c = length(Primes.primes(low, high))
     println("$c primes between $low and $high.")
@@ -173,16 +193,66 @@ mktempdir() do tmp
         @test Base.invokelatest(test_function,5) == 25
 
         # Create a lambda that uses the TestModule...
-        eval(:(@lambda function lambda_test(x)
-
-            using TestModule
-
+        eval(:(@lambda using TestModule function lambda_test(x)
             return test_function(x)
         end))
 
         @test Base.invokelatest(lambda_test,4) == 16
+
+        # Create a lambda that uses the TestModule (with explicit aws config)...
+        eval(:(@lambda using TestModule function lambda_test2(x)
+            return test_function(x)
+        end AWSCore.default_aws_config()))
+
+        @test Base.invokelatest(lambda_test2,5) == 25
     end
 end
+
+
+
+#-------------------------------------------------------------------------------
+# Lambda tests using deployed lambda functions
+#-------------------------------------------------------------------------------
+
+
+@deploy_lambda function count_primes_slow(low::Int, high::Int)
+
+    function is_prime(n)
+        if n ≤ 1
+            return false
+        elseif n ≤ 3
+            return true
+        elseif n % 2 == 0 || n % 3 == 0
+            return false
+        end
+        i = 5
+        while i * i ≤ n
+            if n % i == 0 || n % (i + 2) == 0
+                return false
+            end
+            i += 6
+        end
+        return true
+    end
+
+    c = count(is_prime, low:high)
+    println("$c primes between $low and $high.")
+    return c
+end
+
+@test invoke_jl_lambda("count_primes_slow", 10, 100) == 21
+r = invoke_lambda("count_primes_slow", low=10, high=100)
+@test JSON.parse(r[:jl_data]) == 21
+
+
+@deploy_lambda using Primes function count_primes_fast(low::Int, high::Int)
+
+    c = length(Primes.primes(low, high))
+    println("$c primes between $low and $high.")
+    return c
+end
+
+@test invoke_jl_lambda("count_primes_fast", 10, 100) == 21
 
 
 

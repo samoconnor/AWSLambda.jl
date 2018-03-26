@@ -15,6 +15,10 @@ ENV HAVE_INFOZIP=1
 COPY REQUIRE /var/task/julia/v$JL_VERSION_BASE/
 RUN julia -e 'Pkg.update(); Pkg.resolve()'
 
+# Replace AWSLambda.jl with current version
+COPY AWSLambda.jl \
+     /var/task/julia/v$JL_VERSION_BASE/AWSLambda/src/
+
 
 # Install AWS Lambda entry point scripts.
 COPY AWSLambdaWrapper.jl module_jl_lambda_eval.jl \
@@ -67,12 +71,7 @@ RUN find julia -name '.git' \
             -o -name '*.tar.gz' \
             -o -name 'METADATA' \
             -o -name 'META_BRANCH' \
-        | xargs rm -rf && \
-    find . -type d -empty | xargs rmdir || true && \
-    find . -type d -empty | xargs rmdir || true && \
-    find . -type d -empty | xargs rmdir || true && \
-    find . -type d -empty | xargs rmdir || true && \
-    find . -type d -empty | xargs rmdir || true
+        | xargs rm -rf
 
 FROM lambci/lambda:build-python2.7
 

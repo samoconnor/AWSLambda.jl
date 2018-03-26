@@ -14,6 +14,7 @@ base_zip = "jl_lambda_base_$(VERSION)_$(AWSLambda.aws_lamabda_jl_version).zip"
 
 
 if length(ARGS) == 0 || ARGS[1] == "build"
+cp("../../src/AWSLambda.jl", "AWSLambda.jl"; remove_destination=true)
 run(`docker build
         --build-arg JL_VERSION_BASE=$JL_VERSION_BASE
         --build-arg JL_VERSION_PATCH=$JL_VERSION_PATCH
