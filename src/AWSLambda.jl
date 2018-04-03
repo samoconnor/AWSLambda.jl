@@ -660,9 +660,6 @@ lambda_function(f) = lambda_function(default_aws_config(), f)
 function embed_modules_in_body(aws, body, modules)
 
     load_path, mod_files = module_files(aws, modules)
-    if isempty(mod_files)
-        return body
-    end
     quote
         for (path, code) in $([(k, v) for (k,v) in mod_files])
             path = "/tmp/$path"
