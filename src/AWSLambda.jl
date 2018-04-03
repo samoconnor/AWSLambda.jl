@@ -767,6 +767,8 @@ end
 
 lambda_include(filename) = lambda_include(default_aws_config(), filename)
 
+                                                           # For build_sysimg.jl
+                                       @static if isdefined(Base, :uv_eventloop)
 
 # Create an AWS Lambda to run "jl_code".
 
@@ -867,7 +869,6 @@ create_jl_lambda(name::String, jl_code, modules=Symbol[], options=SymbolDict()) 
         end
 
         InfoZIP.unzip(options[:ZipFile], tmpdir)
-        #run(`ls -laR $tmpdir`)
 
         # Create module precompilation directory under /tmp...
         v = "v$(VERSION.major).$(VERSION.minor)"
@@ -876,7 +877,6 @@ create_jl_lambda(name::String, jl_code, modules=Symbol[], options=SymbolDict()) 
 
         # Run precompilation...
         cmd = "push!(LOAD_PATH, \"$tmpdir\")\n"
-#        cmd *= "push!(LOAD_PATH, \"$tmpdir/julia/$v\")\n"
         for p in load_path
             cmd *= "push!(LOAD_PATH, \"$tmpdir/julia/$p\")\n"
         end
@@ -885,7 +885,6 @@ create_jl_lambda(name::String, jl_code, modules=Symbol[], options=SymbolDict()) 
         println(cmd)
         run(`$JULIA_HOME/julia -e $cmd`)
         run(`chmod -R a+r $ji_path`)
-        #run(`ls -laR $tmpdir`)
 
         # Create new ZIP combining base image and new files from /tmp...
         run(`rm -f /tmp/lambda.zip`)
@@ -996,17 +995,17 @@ macro deploy_lambda(args...)
 
     :(create_jl_lambda($(esc(aws)), $(string(name)), $jl_code, $modules))
 end
-
+                                            end # isdefined(Base, :uv_eventloop)
+                                                           # For build_sysimg.jl
 
 
 #-------------------------------------------------------------------------------
 # Deploy pre-cooked Julia Base Lambda
 #-------------------------------------------------------------------------------
 
-function deploy_jl_lambda_base(aws::AWSConfig = default_aws_config())
-
-    bucket = "octech.com.au.$(aws[:region]).awslambda.jl.deploy"
-    base_zip = "jl_lambda_base_$(VERSION)_$(aws_lamabda_jl_version).zip"
+function deploy_jl_lambda_base(aws::AWSConfig = default_aws_config();
+    bucket = "octech.com.au.$(aws[:region]).awslambda.jl.deploy",
+    base_zip = "jl_lambda_base_$(VERSION)_$(aws_lamabda_jl_version).zip")
 
     old_config = lambda_configuration(aws, "jl_lambda_eval")
 
