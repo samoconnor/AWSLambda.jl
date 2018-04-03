@@ -10,16 +10,27 @@ image_name = "octech/$(replace(basename(pwd()), "_", "")):$JL_VERSION"
 
 lambda_name = basename(pwd())
 
-source_bucket = "octech.com.au.ap-southeast-2.awslambda.jl.deploy"
+source_bucket = "awslambda.jl.deploy.$(aws_account_number(aws_config()))"
 
 base_zip = "$(lambda_name)_$(VERSION)_$(AWSLambda.aws_lamabda_jl_version).zip"
 
 if length(ARGS) == 0 || ARGS[1] == "build"
-cp("../../src/AWSLambda.jl", "AWSLambda.jl"; remove_destination=true)
-run(`docker build
-        --build-arg JL_VERSION_BASE=$JL_VERSION_BASE
-        --build-arg JL_VERSION_PATCH=$JL_VERSION_PATCH
-         -t $image_name .`)
+
+    cp("../../src/AWSLambda.jl", "AWSLambda.jl"; remove_destination=true)
+
+    for f in ["AWSLambdaWrapper.jl",
+              "module_jl_lambda_eval.jl",
+              "Dockerfile",
+              "lambda_config.py",
+              "lambda_function.py"]
+
+        cp("../jl_lambda_eval/$f", f; remove_destination=true)
+    end
+
+    run(`docker build
+            --build-arg JL_VERSION_BASE=$JL_VERSION_BASE
+            --build-arg JL_VERSION_PATCH=$JL_VERSION_PATCH
+             -t $image_name .`)
 end
 
 if length(ARGS) > 0 && ARGS[1] == "shell"
@@ -33,6 +44,7 @@ if length(ARGS) > 0 && ARGS[1] == "zip"
 end
 
 if length(ARGS) > 0 && ARGS[1] == "deploy"
+    s3_create_bucket(source_bucket)
     AWSCore.Services.s3("PUT", "/$source_bucket/$base_zip",
                        headers=Dict("x-amz-acl" => "public-read"),
                        Body=read(base_zip))
