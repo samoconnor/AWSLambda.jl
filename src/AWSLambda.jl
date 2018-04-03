@@ -72,14 +72,14 @@ const aws_lamabda_jl_version = "0.3.0"
 #-------------------------------------------------------------------------------
 
 
-function lambda(aws::AWSConfig, verb; path="", query=Dict(), headers=Dict())
+function lambda(aws::AWSConfig, verb; path="", query=[], headers=Dict())
 
     aws = copy(aws)
     aws[:ordered_json_dict] = false
 
     resource = HTTP.escapepath("/2015-03-31/functions/$path")
 
-    query[:headers] = headers
+    query = @SymDict(headers, query...)
 
     r = AWSCore.Services.lambda(aws, verb, resource, query)
 
@@ -435,20 +435,57 @@ function local_module_cache()
 end
 
 
+global _lambda_module_cache = Symbol[]
+global default_lambda_module_cache = [
+    :AWSCore,
+    :AWSIAM,
+    :AWSLambda,
+    :AWSS3,
+    :Base,
+    :Compat,
+    :Core,
+    :DataStructures,
+    :FNVHash,
+    :Glob,
+    :HTTP,
+    :InfoZIP,
+    :IniFile,
+    :IterTools,
+    :JSON,
+    :LightXML,
+    :Main,
+    :MbedTLS,
+    :Nullables,
+    :Retry,
+    :SymDict,
+    :XMLDict]
+
 # List of modules in the Lambda sandbox ".ji" cache.
 
 function lambda_module_cache(aws::AWSConfig = default_aws_config())
 
-    lambda_eval(aws, :(filter(x->Main.eval(:(
-        try
-            isa($x, Module) && !isfile(string("/tmp/julia/", $x, ".ji"))
-        catch ex
-            if typeof(ex) != UndefVarError
-                rethrow(ex)
+    global _lambda_module_cache
+    if isempty(_lambda_module_cache)
+
+        @protected try
+            _lambda_module_cache = lambda_eval(aws, :(filter(x->Main.eval(:(
+                try
+                    isa($x, Module) && !isfile(string("/tmp/julia/", $x, ".ji"))
+                catch ex
+                    if typeof(ex) != UndefVarError
+                        rethrow(ex)
+                    end
+                    false
+                end
+            )), names(Main))))
+        catch e
+            if ecode(e) == "404"
+                return default_lambda_module_cache
             end
-            false
         end
-    )), names(Main))))
+
+    end
+    return _lambda_module_cache
 end
 
 
@@ -623,6 +660,9 @@ lambda_function(f) = lambda_function(default_aws_config(), f)
 function embed_modules_in_body(aws, body, modules)
 
     load_path, mod_files = module_files(aws, modules)
+    if isempty(mod_files)
+        return body
+    end
     quote
         for (path, code) in $([(k, v) for (k,v) in mod_files])
             path = "/tmp/$path"
@@ -682,7 +722,6 @@ macro lambda(args...)
         modules = [x.args[1] for x in modules.args]
         body = f.args[2]
         body = embed_modules_in_body(eval(aws), body, modules)
-        #FIXME this does not work with sysimg precompilation
     end
 
     # Replace function body with Lambda invocation.
@@ -861,9 +900,9 @@ create_jl_lambda(name::String, jl_code, modules=Symbol[], options=SymbolDict()) 
 
     # Deploy the lambda to AWS...
     if is_new
-        r = create_lambda(aws, name; options...)
+        r = AWSLambda.create_lambda(aws, name; options...)
     else
-        r = update_lambda(aws, name; options...)
+        r = AWSLambda.update_lambda(aws, name; options...)
     end
 
 end
@@ -887,7 +926,7 @@ end
 #   hello("World", "!") # FIXME invoke lambda
 #   Hello World!
 #
-# @lambda deploys an AWS Lambda that contains the body of the Julia function.
+# @deploy_lambda deploys an AWS Lambda that contains the body of the Julia function.
 
 
 """
