@@ -1,6 +1,6 @@
-using AWSCore 
+using AWSCore
 using AWSS3
-using AWSLambda 
+using AWSLambda
 
 JL_VERSION_BASE="0.6"
 JL_VERSION_PATCH="2"

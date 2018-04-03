@@ -1,6 +1,6 @@
-using AWSCore 
+using AWSCore
 using AWSS3
-using AWSLambda 
+using AWSLambda
 
 JL_VERSION_BASE="0.6"
 JL_VERSION_PATCH="2"
@@ -48,5 +48,5 @@ if length(ARGS) > 0 && ARGS[1] == "deploy"
     AWSCore.Services.s3("PUT", "/$source_bucket/$base_zip",
                        headers=Dict("x-amz-acl" => "public-read"),
                        Body=read(base_zip))
-    AWSLambda.deploy_jl_lambda_base(bucket = source_bucket, base_zip = base_zip)
+    AWSLambda.deploy_jl_lambda_eval(bucket = source_bucket, base_zip = base_zip)
 end
