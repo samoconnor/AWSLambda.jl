@@ -41,7 +41,7 @@ export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        @lambda, @deploy_lambda, lambda_add_permission, lambda_get_permissions,
        lambda_delete_permission, lambda_delete_permissions,
        create_py_lambda,
-       deploy_jl_lambda_base,
+       deploy_jl_lambda_eval,
        lambda_configuration,
        lambda_create_alias, lambda_update_alias, lambda_publish_version,
        apigateway, apigateway_restapis, apigateway_create,
@@ -1003,9 +1003,9 @@ end
 # Deploy pre-cooked Julia Base Lambda
 #-------------------------------------------------------------------------------
 
-function deploy_jl_lambda_base(aws::AWSConfig = default_aws_config();
+function deploy_jl_lambda_eval(aws::AWSConfig = default_aws_config();
     bucket = "octech.com.au.$(aws[:region]).awslambda.jl.deploy",
-    base_zip = "jl_lambda_base_$(VERSION)_$(aws_lamabda_jl_version).zip")
+    base_zip = "jl_lambda_eval_$(VERSION)_$(aws_lamabda_jl_version).zip")
 
     old_config = lambda_configuration(aws, "jl_lambda_eval")
 

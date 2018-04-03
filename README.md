@@ -16,7 +16,7 @@ aws = aws_config(region = "us-east-1")
 Deploy the base `jl_lambda_eval` function...
 
 ```julia
-deploy_jl_lambda_base(aws)
+deploy_jl_lambda_eval(aws)
 ```
 
 

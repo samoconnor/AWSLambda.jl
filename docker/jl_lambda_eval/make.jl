@@ -6,19 +6,20 @@ JL_VERSION_BASE="0.6"
 JL_VERSION_PATCH="2"
 JL_VERSION="$JL_VERSION_BASE.$JL_VERSION_PATCH"
 
-image_name = "octech/$(basename(pwd())):$JL_VERSION"
+image_name = "octech/$(replace(basename(pwd()), "_", "")):$JL_VERSION"
+
+lambda_name = basename(pwd())
 
 source_bucket = "octech.com.au.ap-southeast-2.awslambda.jl.deploy"
 
-base_zip = "jl_lambda_base_$(VERSION)_$(AWSLambda.aws_lamabda_jl_version).zip"
-
+base_zip = "$(lambda_name)_$(VERSION)_$(AWSLambda.aws_lamabda_jl_version).zip"
 
 if length(ARGS) == 0 || ARGS[1] == "build"
-cp("../../src/AWSLambda.jl", "AWSLambda.jl"; remove_destination=true)
-run(`docker build
-        --build-arg JL_VERSION_BASE=$JL_VERSION_BASE
-        --build-arg JL_VERSION_PATCH=$JL_VERSION_PATCH
-         -t $image_name .`)
+    cp("../../src/AWSLambda.jl", "AWSLambda.jl"; remove_destination=true)
+    run(`docker build
+            --build-arg JL_VERSION_BASE=$JL_VERSION_BASE
+            --build-arg JL_VERSION_PATCH=$JL_VERSION_PATCH
+             -t $image_name .`)
 end
 
 if length(ARGS) > 0 && ARGS[1] == "shell"

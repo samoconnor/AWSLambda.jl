@@ -1,6 +1,6 @@
 using AWSLambda
 
-image_name = "octech/$(basename(pwd())):$VERSION"
+image_name = "octech/$(replace(basename(pwd()), "_", "")):$VERSION"
 
 if length(ARGS) == 0 || ARGS[1] == "build"
     run(`docker build --build-arg JL_VERSION=$VERSION -t $image_name .`)
