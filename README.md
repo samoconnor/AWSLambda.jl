@@ -10,7 +10,7 @@ and try the [Create a Simple Lambda Function](https://docs.aws.amazon.com/lambda
 
 With this package you can:
 
- - Call a Lambda function (defined in Node.js, Python, etc) from Julia.
+ - [Invoke a Lambda function](#invoke-a-lambda-function-from-julia) (defined in Node.js, Python, etc) from Julia.
     ```julia
     AWSLambda.invoke_lambda("MyFunction")
     ```
@@ -57,7 +57,7 @@ Dict{String,Any} with 7 entries:
 ```
 
 
-### Invoke a Node.js Lambda function from Julia
+### Invoke a Lambda function from Julia
 
 This example assumes that you created a Node.js Lambda function `MyFunction`
 in the [Create a Simple Lambda Function](https://docs.aws.amazon.com/lambda/latest/dg/get-started-create-function.html) exercise.
