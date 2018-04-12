@@ -298,7 +298,18 @@ end
 
 function Base.show(io::IO, e::AWSLambdaException)
 
-    println(io, string("AWSLambdaException \"", e.name, "\":\n", e.message, "\n"))
+    info = try
+        JSON.parse(e.message)
+    catch
+        Dict("message" => e.message)
+    end
+    println(io, string("AWSLambdaException \"", e.name, "\":\n",
+                       info["message"], "\n"))
+    for (k, v) in info
+        if k != "message"
+            println(io, "$k: $v")
+        end
+    end
 end
 
 
