@@ -60,6 +60,15 @@ def lambda_handler(event, context):
 
     print(cpu_model_name)
 
+    info = {
+        'invoked_function_arn': context.invoked_function_arn,
+        'function_version':     context.function_version,
+        'aws_request_id':       context.aws_request_id,
+        'log_group_name':       context.log_group_name,
+        'log_stream_name':      context.log_stream_name,
+        'cpu':                  cpu_model_name
+    }
+
     # Store input in tmp files...
     with open('/tmp/lambda_in', 'w') as f:
         json.dump(event, f)
@@ -87,7 +96,7 @@ def lambda_handler(event, context):
     out = ''
     complete = False
     while time.time() < time_limit:
-        ready = select.select([julia_proc.stdout], [], [],  
+        ready = select.select([julia_proc.stdout], [], [],
                               time_limit - time.time())
         if julia_proc.stdout in ready[0]:
             line = julia_proc.stdout.readline()
@@ -98,7 +107,8 @@ def lambda_handler(event, context):
                 message = 'EOF on Julia stdout!'
                 if julia_proc.poll() != None:
                     message += (' Exit code: ' + str(julia_proc.returncode))
-                raise Exception(message + '\n' + out + cpu_model_name)
+                info['message'] = message + '\n' + out
+                raise Exception(json.dumps(info))
             print(line, end='')
             out += line
 
@@ -118,30 +128,18 @@ def lambda_handler(event, context):
 
     # Check exit status...
     if julia_proc == None or julia_proc.poll() != None:
-        if error_sns_arn != '':
-            subject = 'Lambda ' + ('Error: ' if complete else 'Timeout: ')     \
-                    + name + json.dumps(event, separators=(',',':'))
-            error = name + '\n'                                                \
-                  + context.invoked_function_arn + '\n'                        \
-                  + context.log_group_name + context.log_stream_name + '\n'    \
-                  + json.dumps(event) + '\n\n'                                 \
-                  + out
-            import boto3
-            try:
-                boto3.client('sns').publish(TopicArn=error_sns_arn,
-                                            Message=error,
-                                            Subject=subject[:100])
-            except Exception:
-                pass
-
-        raise Exception(out + cpu_model_name)
+        info['message'] = out
+        raise Exception(json.dumps(info))
 
     # Return content of output file...
     if os.path.isfile('/tmp/lambda_out'):
         with open('/tmp/lambda_out', 'r') as f:
-            return {'jl_data': f.read(), 'stdout': out}
-    else:
-        return {'stdout': out}
+            if 'jl_data' in event:
+                return {'jl_data': f.read(), 'stdout': out}
+            else:
+                return json.load(f)
+
+    return {'stdout': out}
 
 
 

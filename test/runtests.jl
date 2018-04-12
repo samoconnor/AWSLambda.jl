@@ -254,7 +254,7 @@ end
 
 @test invoke_jl_lambda("count_primes_slow", 10, 100) == 21
 r = invoke_lambda("count_primes_slow", low=10, high=100)
-@test JSON.parse(r[:jl_data]) == 21
+@test r == 21
 
 
 @deploy_lambda using Primes function count_primes_fast(low::Int, high::Int)
@@ -271,7 +271,7 @@ mktempdir() do tmp
         run(`aws lambda invoke --function-name count_primes_fast
                                --payload "{\"low\": 10, \"high\": 100}"
                                output.txt`)
-        r = JSON.parse(JSON.parse(readstring("output.txt"))["jl_data"])
+        r = JSON.parse(readstring("output.txt"))
 
         @test r == 21
     end

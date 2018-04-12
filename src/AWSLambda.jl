@@ -311,6 +311,7 @@ function invoke_lambda(aws::AWSConfig, name, args::Dict; async=false)
                         path="$name/invocations",
                         headers=Dict("X-Amz-Invocation-Type" =>
                                      async ? "Event" : "RequestResponse"),
+#FIXME async not working?
                         query=args)
 
         if isa(r, Dict) && haskey(r, :errorMessage)
@@ -779,9 +780,6 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
     full_load_path = join([":/var/task/julia/$p" for p in load_path])
     py_config = ["os.environ['JULIA_LOAD_PATH'] += '$full_load_path'\n"]
 
-@show full_load_path
-@show py_config
-
     if AWSCore.debug_level > 0
         println("create_jl_lambda($name)")
         for f in keys(mod_files)
@@ -795,19 +793,6 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
     options[:env] = env
     for (n,v) in env
         push!(py_config, "os.environ['$n'] = '$v'\n")
-    end
-
-    # Get error topic from "aws" or "options"...
-    error_sns_arn = get(options, :error_sns_arn,
-                    get(aws, :lambda_error_sns_arn, ""))
-    push!(py_config, "error_sns_arn = '$error_sns_arn'\n")
-
-    # Get DLQ topic from "aws" if not already in "options"...
-    if !haskey(options, :DeadLetterConfig) &&
-        haskey(aws, :lambda_error_sns_arn)
-
-        options[:DeadLetterConfig] = Dict(:TargetArn =>
-                                          aws[:lambda_dlq_sns_arn])
     end
 
     # Start with ZipFile from options...
