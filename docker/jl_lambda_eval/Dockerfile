@@ -95,4 +95,6 @@ RUN cp /var/task-build/bin/julia                bin/                        && \
 
 COPY lambda_function.py lambda_config.py        ./
 
+# FIXME Remove "|| true" When MbedTLS stripping fix is released.
+# https://github.com/JuliaWeb/MbedTLS.jl/issues/140
 RUN for f in $(find . -name '*.so'); do strip $f || true; done

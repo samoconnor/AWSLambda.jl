@@ -19,7 +19,7 @@ lambda_function(f::Function) = Base.invokelatest(f)
 
 lambda_function(e::Expr) = eval(Main, e)
 
-function lambda_function(v::Vector{Expr})
+function lambda_function(v::Vector)
     for e in v[1:end-1]
         eval(Main, e)
     end

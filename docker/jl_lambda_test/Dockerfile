@@ -1,6 +1,6 @@
 ARG JL_VERSION=0.6.2
 
-FROM octech/lambdajlbuild:$JL_VERSION
+FROM octech/jllambdaeval:$JL_VERSION
 
 FROM lambci/lambda:python2.7
 

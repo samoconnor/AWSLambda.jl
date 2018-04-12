@@ -16,6 +16,17 @@ using Base.Test
 AWSCore.set_debug_level(1)
 
 
+try
+    @lambda_eval run(`uname`)
+catch e
+    if ecode(e) == "404"
+        AWSLambda.deploy_jl_lambda_base()
+    else
+        rethrow(e)
+    end
+end
+
+
 #-------------------------------------------------------------------------------
 # Lambda tests using base jl_labda_eval function
 #-------------------------------------------------------------------------------
@@ -66,9 +77,10 @@ end
                         for (k, v) in (split(l, ":")
                         for l in Iterators.filter(x -> contains(x, ":"), eachline(io))))
         end
-    end)["model name"] in ["Intel(R) Xeon(R) CPU E5-2680 v2 @ 2.80GHz",
-                           "Intel(R) Xeon(R) CPU E5-2666 v3 @ 2.90GHz",
-                           "Intel(R) Xeon(R) CPU E5-2676 v3 @ 2.40GHz"]
+    end)["model name"] in ["Intel(R) Xeon(R) CPU E5-2666 v3 @ 2.90GHz",
+                           "Intel(R) Xeon(R) CPU E5-2676 v3 @ 2.40GHz",
+                           "Intel(R) Xeon(R) CPU E5-2680 v2 @ 2.80GHz",
+                           "Intel(R) Xeon(R) CPU E5-2686 v4 @ 2.30GHz"]
 
 @test lambda_include_string("1 + 1") == 2
 
@@ -242,7 +254,7 @@ end
 
 @test invoke_jl_lambda("count_primes_slow", 10, 100) == 21
 r = invoke_lambda("count_primes_slow", low=10, high=100)
-@test JSON.parse(r[:jl_data]) == 21
+@test r == 21
 
 
 @deploy_lambda using Primes function count_primes_fast(low::Int, high::Int)
@@ -259,7 +271,7 @@ mktempdir() do tmp
         run(`aws lambda invoke --function-name count_primes_fast
                                --payload "{\"low\": 10, \"high\": 100}"
                                output.txt`)
-        r = JSON.parse(JSON.parse(readstring("output.txt"))["jl_data"])
+        r = JSON.parse(readstring("output.txt"))
 
         @test r == 21
     end

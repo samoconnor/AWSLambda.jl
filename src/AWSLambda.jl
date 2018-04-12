@@ -41,7 +41,7 @@ export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
        @lambda, @deploy_lambda, lambda_add_permission, lambda_get_permissions,
        lambda_delete_permission, lambda_delete_permissions,
        create_py_lambda,
-       deploy_jl_lambda_base,
+       deploy_jl_lambda_eval,
        lambda_configuration,
        lambda_create_alias, lambda_update_alias, lambda_publish_version,
        apigateway, apigateway_restapis, apigateway_create,
@@ -72,14 +72,14 @@ const aws_lamabda_jl_version = "0.3.0"
 #-------------------------------------------------------------------------------
 
 
-function lambda(aws::AWSConfig, verb; path="", query=Dict(), headers=Dict())
+function lambda(aws::AWSConfig, verb; path="", query=[], headers=Dict())
 
     aws = copy(aws)
     aws[:ordered_json_dict] = false
 
     resource = HTTP.escapepath("/2015-03-31/functions/$path")
 
-    query[:headers] = headers
+    query = @SymDict(headers, query...)
 
     r = AWSCore.Services.lambda(aws, verb, resource, query)
 
@@ -298,7 +298,18 @@ end
 
 function Base.show(io::IO, e::AWSLambdaException)
 
-    println(io, string("AWSLambdaException \"", e.name, "\":\n", e.message, "\n"))
+    info = try
+        JSON.parse(e.message)
+    catch
+        Dict("message" => e.message)
+    end
+    println(io, string("AWSLambdaException \"", e.name, "\":\n",
+                       info["message"], "\n"))
+    for (k, v) in info
+        if k != "message"
+            println(io, "$k: $v")
+        end
+    end
 end
 
 
@@ -311,6 +322,7 @@ function invoke_lambda(aws::AWSConfig, name, args::Dict; async=false)
                         path="$name/invocations",
                         headers=Dict("X-Amz-Invocation-Type" =>
                                      async ? "Event" : "RequestResponse"),
+#FIXME async not working?
                         query=args)
 
         if isa(r, Dict) && haskey(r, :errorMessage)
@@ -435,20 +447,57 @@ function local_module_cache()
 end
 
 
+global _lambda_module_cache = Symbol[]
+global default_lambda_module_cache = [
+    :AWSCore,
+    :AWSIAM,
+    :AWSLambda,
+    :AWSS3,
+    :Base,
+    :Compat,
+    :Core,
+    :DataStructures,
+    :FNVHash,
+    :Glob,
+    :HTTP,
+    :InfoZIP,
+    :IniFile,
+    :IterTools,
+    :JSON,
+    :LightXML,
+    :Main,
+    :MbedTLS,
+    :Nullables,
+    :Retry,
+    :SymDict,
+    :XMLDict]
+
 # List of modules in the Lambda sandbox ".ji" cache.
 
 function lambda_module_cache(aws::AWSConfig = default_aws_config())
 
-    lambda_eval(aws, :(filter(x->Main.eval(:(
-        try
-            isa($x, Module) && !isfile(string("/tmp/julia/", $x, ".ji"))
-        catch ex
-            if typeof(ex) != UndefVarError
-                rethrow(ex)
+    global _lambda_module_cache
+    if isempty(_lambda_module_cache)
+
+        @protected try
+            _lambda_module_cache = lambda_eval(aws, :(filter(x->Main.eval(:(
+                try
+                    isa($x, Module) && !isfile(string("/tmp/julia/", $x, ".ji"))
+                catch ex
+                    if typeof(ex) != UndefVarError
+                        rethrow(ex)
+                    end
+                    false
+                end
+            )), names(Main))))
+        catch e
+            if ecode(e) == "404"
+                return default_lambda_module_cache
             end
-            false
         end
-    )), names(Main))))
+
+    end
+    return _lambda_module_cache
 end
 
 
@@ -682,7 +731,6 @@ macro lambda(args...)
         modules = [x.args[1] for x in modules.args]
         body = f.args[2]
         body = embed_modules_in_body(eval(aws), body, modules)
-        #FIXME this does not work with sysimg precompilation
     end
 
     # Replace function body with Lambda invocation.
@@ -728,6 +776,8 @@ end
 
 lambda_include(filename) = lambda_include(default_aws_config(), filename)
 
+                                                           # For build_sysimg.jl
+                                       @static if isdefined(Base, :uv_eventloop)
 
 # Create an AWS Lambda to run "jl_code".
 
@@ -740,9 +790,6 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
     load_path, mod_files = module_files(aws, modules)
     full_load_path = join([":/var/task/julia/$p" for p in load_path])
     py_config = ["os.environ['JULIA_LOAD_PATH'] += '$full_load_path'\n"]
-
-@show full_load_path
-@show py_config
 
     if AWSCore.debug_level > 0
         println("create_jl_lambda($name)")
@@ -757,19 +804,6 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
     options[:env] = env
     for (n,v) in env
         push!(py_config, "os.environ['$n'] = '$v'\n")
-    end
-
-    # Get error topic from "aws" or "options"...
-    error_sns_arn = get(options, :error_sns_arn,
-                    get(aws, :lambda_error_sns_arn, ""))
-    push!(py_config, "error_sns_arn = '$error_sns_arn'\n")
-
-    # Get DLQ topic from "aws" if not already in "options"...
-    if !haskey(options, :DeadLetterConfig) &&
-        haskey(aws, :lambda_error_sns_arn)
-
-        options[:DeadLetterConfig] = Dict(:TargetArn =>
-                                          aws[:lambda_dlq_sns_arn])
     end
 
     # Start with ZipFile from options...
@@ -828,7 +862,6 @@ create_jl_lambda(name::String, jl_code, modules=Symbol[], options=SymbolDict()) 
         end
 
         InfoZIP.unzip(options[:ZipFile], tmpdir)
-        #run(`ls -laR $tmpdir`)
 
         # Create module precompilation directory under /tmp...
         v = "v$(VERSION.major).$(VERSION.minor)"
@@ -837,7 +870,6 @@ create_jl_lambda(name::String, jl_code, modules=Symbol[], options=SymbolDict()) 
 
         # Run precompilation...
         cmd = "push!(LOAD_PATH, \"$tmpdir\")\n"
-#        cmd *= "push!(LOAD_PATH, \"$tmpdir/julia/$v\")\n"
         for p in load_path
             cmd *= "push!(LOAD_PATH, \"$tmpdir/julia/$p\")\n"
         end
@@ -846,7 +878,6 @@ create_jl_lambda(name::String, jl_code, modules=Symbol[], options=SymbolDict()) 
         println(cmd)
         run(`$JULIA_HOME/julia -e $cmd`)
         run(`chmod -R a+r $ji_path`)
-        #run(`ls -laR $tmpdir`)
 
         # Create new ZIP combining base image and new files from /tmp...
         run(`rm -f /tmp/lambda.zip`)
@@ -861,9 +892,9 @@ create_jl_lambda(name::String, jl_code, modules=Symbol[], options=SymbolDict()) 
 
     # Deploy the lambda to AWS...
     if is_new
-        r = create_lambda(aws, name; options...)
+        r = AWSLambda.create_lambda(aws, name; options...)
     else
-        r = update_lambda(aws, name; options...)
+        r = AWSLambda.update_lambda(aws, name; options...)
     end
 
 end
@@ -887,7 +918,7 @@ end
 #   hello("World", "!") # FIXME invoke lambda
 #   Hello World!
 #
-# @lambda deploys an AWS Lambda that contains the body of the Julia function.
+# @deploy_lambda deploys an AWS Lambda that contains the body of the Julia function.
 
 
 """
@@ -957,17 +988,17 @@ macro deploy_lambda(args...)
 
     :(create_jl_lambda($(esc(aws)), $(string(name)), $jl_code, $modules))
 end
-
+                                            end # isdefined(Base, :uv_eventloop)
+                                                           # For build_sysimg.jl
 
 
 #-------------------------------------------------------------------------------
 # Deploy pre-cooked Julia Base Lambda
 #-------------------------------------------------------------------------------
 
-function deploy_jl_lambda_base(aws::AWSConfig = default_aws_config())
-
-    bucket = "octech.com.au.$(aws[:region]).awslambda.jl.deploy"
-    base_zip = "jl_lambda_base_$(VERSION)_$(aws_lamabda_jl_version).zip"
+function deploy_jl_lambda_eval(aws::AWSConfig = default_aws_config();
+    bucket = "octech.com.au.$(aws[:region]).awslambda.jl.deploy",
+    base_zip = "jl_lambda_eval_$(VERSION)_$(aws_lamabda_jl_version).zip")
 
     old_config = lambda_configuration(aws, "jl_lambda_eval")
 
