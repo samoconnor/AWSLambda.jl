@@ -10,28 +10,14 @@ and try the [Create a Simple Lambda Function](https://docs.aws.amazon.com/lambda
 
 With this package you can:
 
- - [Invoke a Lambda function](#invoke-a-lambda-function-from-julia) (defined in Node.js, Python, etc) from Julia.
-    ```julia
-    AWSLambda.invoke_lambda("MyFunction")
-    ```
- - Use the Lambda service to evaluate a Julia expression.
-    ```julia
-    AWSLambda.@lambda_eval binomial(big(10^6), big(10^5))
-    ```
- - Create a local Julia function who's body is evaluated on the Lambda service.
-    ```julia
-    AWSLambda.@lambda function lambda_env(x)
-        return ENV[x]
-    end
-    ```
- - Deploy a Julia Lambda function that can be called using the AWS SDK
-   for JavaScript, Python etc.
-    ```julia
-    AWSLambda.@deploy_lambda function lambda_env(x)
-        return ENV[x]
-    end
-    ```
-
+ - [Invoke a Lambda function](#invoke-a-lambda-function-from-julia)
+   (defined in Node.js, Python, etc) from Julia.
+ - [Evaluate a Julia expression](#run-a-julia-expression-in-the-cloud)
+   using Lambda.
+ - [Create a local Julia function](#run-a-julia-function-in-the-cloud)
+    who's body is evaluated on in the cloud.
+ - [Deploy a Julia Lambda function](#deploy-a-julia-lambda-function)
+   that can be called using the AWS SDK for JavaScript, Python etc.
 
 
 ## Getting Started
@@ -107,7 +93,7 @@ After deployment `jl_lambda_eval` should be visible in the
 _To learn more about the internals of `jl_lambda_eval` see the [`Dockerfile`](https://github.com/samoconnor/AWSLambda.jl/blob/master/docker/jl_lambda_eval/Dockerfile) and the [`make.jl`](https://github.com/samoconnor/AWSLambda.jl/blob/master/docker/jl_lambda_eval/make.jl) script._
 
 
-### Use `jl_lambda_eval` to run Julia code in the cloud
+### Run a Julia expression in the cloud
 
 The `@lambda_eval` macro passess a Julia expression to the `jl_lambda_eval`
 Lambda and returns the result.
@@ -118,25 +104,12 @@ Linux ip-10-13-21-185 4.9.85-38.58.amzn1.x86_64
 
 >julia AWSLambda.@lambda_eval ENV["LAMBDA_TASK_ROOT"]
 "/var/task"
+
+julia> AWSLambda.@lambda_eval @time binomial(big(10^6), big(10^5))
+  0.559756 seconds (7.31 k allocations: 94.242 KiB)
+
+73331919...
 ```
-
-The `@lambda function ...` macro creates a local function that
-passes its arguments and its function body expression to `jl_lambda_eval`
-and returns the result.
-
-
-```julia
-julia> AWSLambda.@lambda function foo(x)
-           x = x * 2
-           system = chomp(readstring(`uname`))
-           return x, system
-       end
-
-julia> foo(7)
-
-(14, "Linux")
-```
-
 
 A more complex expression example:
 ```julia
@@ -176,6 +149,33 @@ julia> r = AWSLambda.@lambda_eval begin
 
 Dict{String,Any} with 1 entry:
   "origin" => "13.55.241.245"
+```
+
+
+### Run a Julia function in the cloud
+
+The `@lambda function ...` macro creates a local Julia function that
+passes its arguments and its function body expression to `jl_lambda_eval`
+and returns the result. Functions defined this way are not deployed as
+new Lambda functions (they are executed dynamically by the `jl_lambda_eval`
+Lambda) so they are only callable from the Julia program where they
+are defined.
+
+Multiple invocations of these functions can be run in parallel using Julia tasks.  e.g. using [`asyncmap`](https://docs.julialang.org/en/stable/stdlib/parallel/#Base.asyncmap) with `ntasks=500` will run 500 Labda invocations in parallel.
+By default AWS Account concurrency limit is 1000 but this 
+[can be increased if needed](https://docs.aws.amazon.com/lambda/latest/dg/concurrent-executions.html).
+
+
+```julia
+julia> AWSLambda.@lambda function foo(x)
+           x = x * 2
+           system = chomp(readstring(`uname`))
+           return x, system
+       end
+
+julia> foo(7)
+
+(14, "Linux")
 ```
 
 
