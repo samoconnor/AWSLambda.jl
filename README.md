@@ -84,7 +84,7 @@ Now the function can be called with keyword arguments `foo=` and `bar=`:
 
 ```julia
 julia> AWSLambda.invoke_lambda("MyFunction", foo=7, bar="xyz")
-"Hello from Lambda, foo=7, bar=xyz"
+"foo=7, bar=xyz"
 ```
 
 
