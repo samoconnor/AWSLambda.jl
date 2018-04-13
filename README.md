@@ -1,5 +1,11 @@
 # AWSLambda
 
+_Note, the `master` branch of this package has recently been updated for
+Julia 0.6.2. The update includes breaking API changes. This README.md file
+describes the new interface. The updated version does not yet have a release
+tag pending futhrur testing. If you would like to help with testing, please
+follow the instructions below._
+
 [AWS Lambda](https://aws.amazon.com/documentation/lambda/) Interface for Julia.
 
 If you are new to Lambda, please read [What is AWS Lambda](https://docs.aws.amazon.com/lambda/latest/dg/welcome.html)
