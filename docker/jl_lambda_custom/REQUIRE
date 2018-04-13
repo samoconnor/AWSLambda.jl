@@ -10,5 +10,4 @@ AWSSES
 AWSLambda
 JuMP
 Clp
-JSON
 TimerOutputs
