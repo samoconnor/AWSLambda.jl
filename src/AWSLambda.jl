@@ -431,7 +431,12 @@ function local_module_cache()
 end
 
 
+function __init__()
+    global _lambda_module_cache = Symbol[]
+end
+
 global _lambda_module_cache = Symbol[]
+
 global default_lambda_module_cache = [
     :AWSCore,
     :AWSIAM,
@@ -923,28 +928,27 @@ macro deploy(ex, function_ex)
     if ex.head in (:toplevel, :using)
         deploy_ex(:(Dict{Symbol,Any}()), ex, function_ex)
     else
-        deploy_ex(ex, :(), function_ex)
+        deploy_ex(ex, Expr(:toplevel), function_ex)
     end
 end
 
 macro deploy(function_ex)
-    deploy_ex(:(Dict{Symbol,Any}()), :(), function_ex)
+    deploy_ex(:(Dict{Symbol,Any}()), Expr(:toplevel), function_ex)
 end
 
 
 function deploy_ex(options_ex, using_ex, function_ex)
 
-    @require using_ex == :() || using_ex.head in (:toplevel, :using)
-    @require using_ex.head == :using || all(x->x.head == :using, using_ex.args)
+    # Wrap single-module using expression with :toplevel
+    if using_ex.head == :using
+        using_ex = Expr(:toplevel, using_ex)
+    end
+
+    @require using_ex.head == :toplevel
+    @require all(x->x.head == :using, using_ex.args)
     @require function_ex.head == :function
 
-    if using_ex.head == :toplevel
-        modules = Symbol[x.args[1] for x in using_ex.args]
-    elseif using_ex.head == :using
-        modules = Symbol[using_ex.args[1]]
-    else
-        modules = Symbol[]
-    end
+    modules = Symbol[x.args[1] for x in using_ex.args]
 
     # Rewrite function name to be :lambda_function...
     call, body = function_ex.args
@@ -961,7 +965,7 @@ function deploy_ex(options_ex, using_ex, function_ex)
 
         module $(Symbol("module_$name"))
 
-        $using_ex
+        $(join(["using $m" for m in modules], "; "))
 
         $function_ex
 

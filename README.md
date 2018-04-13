@@ -381,10 +381,90 @@ total 8
 ```
 
 
+### Deploy a custom `jl_lambda_eval`
+
+The default `jl_lambda_eval` includes only a small set of Julia packages
+(run `AWSLambda.lambda_module_cache()` to see a list).
+If the packages that your project depends on are implemented in Julia they
+will be deployed to Lambda automatically by `AWSLambda.@deploy using ...`
+(see the `using Primes` example above).
+However, if your project uses a package that depends on a binary library,
+you will need to deploy a custom `jl_lambda_eval` that bundles the required
+libraries.
+
+The example under [`docker/jl_lambda_custom`](https://github.com/samoconnor/AWSLambda.jl/tree/master/docker/jl_lambda_custom)
+demonstrates how to deploy a custom `jl_lambda_eval`.
+The [`REQUIRE`](https://github.com/samoconnor/AWSLambda.jl/blob/master/docker/jl_lambda_custom/REQUIRE)
+file specifies required packages. In the example, the `JuMP` and `Clp` packages
+are listed along with some basic AWS interface packages.
+
+From the `docker/jl_lambda_custom` directory, run `make.jl` to build and
+deploy the custom image: 
+
+```bash
+bash$ julia make.jl build
+Sending build context to Docker daemon  131.7MB
+...
+Successfully built 703da15825e2
+Successfully tagged octech/jllambdaeval:0.6.2
+
+bash$ julia make.jl zip
+  adding: julia/ (stored 0%)
+...
+
+bash$ julia make.jl deploy
+Creating Bucket "awslambda.jl.deploy.551613799374"...
+...
+```
+
+After the custom image is deployed. Start a new Julia REPL and check that
+JuMP is now listed in `AWSLambda.lambda_module_cache()`:
+
+```julia
+julia> using AWSLambda
+julia> :JuMP in AWSLambda.lambda_module_cache()
+true
+```
+
+Next, deploy a new Lambda function that uses Jump and Clp:
+```julia
+julia> using AWSLambda
+julia> using JuMP, Clp
+
+julia> AWSLambda.@deploy using JuMP, Clp function jump_example(x_max, y_max)
+           m = Model(solver = ClpSolver())
+
+           @variable(m, 0 <= x <= x_max)
+           @variable(m, 0 <= y <= y_max)
+
+           @objective(m, Max, 5x + 3y)
+           @constraint(m, 1x + 5y <= 3.0)
+
+           print(m)
+
+           status = solve(m)
+
+           println("Objective value: ", getobjectivevalue(m))
+           println("x = ", getvalue(x))
+           println("y = ", getvalue(y))
+           return status
+       end
+
+julia> AWSLambda.invoke_jl_lambda("jump_example", 2, 30)
+Max 5 x + 3 y
+Subject to
+ x + 5 y ≤ 3
+ 0 ≤ x ≤ 2
+ 0 ≤ y ≤ 30
+Objective value: 10.6
+x = 2.0
+y = 0.2
+
+:Optimal
+```
+
+
+
 ## Documentation TODO
 
 - Example of [`DeadLetterConfig` option](https://docs.aws.amazon.com/lambda/latest/dg/API_CreateFunction.html#SSS-CreateFunction-request-DeadLetterConfig)
-
-- Example of [`MemorySize` option](https://docs.aws.amazon.com/lambda/latest/dg/API_CreateFunction.html#SSS-CreateFunction-request-MemorySize)
-
-- Example of custom `jl_lambda_eval` image with project specific modules.
