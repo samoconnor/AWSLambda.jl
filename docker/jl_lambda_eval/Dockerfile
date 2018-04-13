@@ -55,6 +55,7 @@ RUN find julia -name '.git' \
             -o -path '*/deps/usr/manifests' \
             -o -path '*/deps/downloads' \
             -o -path '*/deps/builds' \
+            -o -path '*/deps/src' \
             -o -path '*/deps/usr/logs' \
             -o -path '*/JSON/data' \
             -o \( -type f -path '*/deps/src/*' ! -name '*.so.*' \) \

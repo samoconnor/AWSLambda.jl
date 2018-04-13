@@ -17,7 +17,7 @@ AWSCore.set_debug_level(1)
 
 
 try
-    @lambda_eval run(`uname`)
+    AWSLambda.@lambda_eval run(`uname`)
 catch e
     if ecode(e) == "404"
         AWSLambda.deploy_jl_lambda_base()
@@ -31,13 +31,13 @@ end
 # Lambda tests using base jl_labda_eval function
 #-------------------------------------------------------------------------------
 
-f = lambda_function(readstring)
+f = AWSLambda.lambda_function(readstring)
 @test chomp(f(`uname`)) == "Linux"
 
-f = lambda_function(sum)
+f = AWSLambda.lambda_function(sum)
 @test f([1,2,3.5]) == 6.5
 
-f = lambda_function((a::String, b::Int) -> begin
+f = AWSLambda.lambda_function((a::String, b::Int) -> begin
     repeat(a, b)
 end)
 @test f("FOO", 2) == "FOOFOO"
@@ -53,25 +53,25 @@ module Foo
 end
 @test Foo.f("FOO", 2) == "FOOFOO"
 
-@lambda function foo(a::String, b::Int)
+AWSLambda.@lambda function foo(a::String, b::Int)
     repeat(a, b)
 end
 @test foo("FOO", 2) == "FOOFOO"
 
-@lambda function lreadstring(a)
+AWSLambda.@lambda function lreadstring(a)
     readstring(a)
 end
 @test chomp(lreadstring(`uname`)) == "Linux"
 
 module Foo2
     using AWSLambda
-    @lambda function foo(a::Cmd)
+    AWSLambda.@lambda function foo(a::Cmd)
         chomp(readstring(a))
     end
 end
 @test Foo2.foo(`uname`) == "Linux"
 
-@test lambda_eval(quote
+@test AWSLambda.lambda_eval(quote
         open("/proc/cpuinfo") do io
             return Dict(strip(k) => strip(v)
                         for (k, v) in (split(l, ":")
@@ -82,13 +82,13 @@ end
                            "Intel(R) Xeon(R) CPU E5-2680 v2 @ 2.80GHz",
                            "Intel(R) Xeon(R) CPU E5-2686 v4 @ 2.30GHz"]
 
-@test lambda_include_string("1 + 1") == 2
+@test AWSLambda.lambda_include_string("1 + 1") == 2
 
-@test (@lambda_eval begin
+@test (AWSLambda.@lambda_eval begin
     HTTP.header(HTTP.get("http://httpbin.org/ip"), "Content-Type")
 end) == "application/json"
 
-r = @lambda_eval begin
+r = AWSLambda.@lambda_eval begin
 
     module Foo
 
@@ -114,7 +114,7 @@ end
 
 # Count primes in the cloud...
 
-@lambda function count_primes(low::Int, high::Int)
+AWSLambda.@lambda function count_primes(low::Int, high::Int)
 
     function is_prime(n)
         if n ≤ 1
@@ -155,7 +155,7 @@ end
 
 @test pcount_primes(10, 100000000) == 5761451
                                                                              end
-@lambda using Primes function count_primes2(low::Int, high::Int)
+AWSLambda.@lambda using Primes function count_primes2(low::Int, high::Int)
 
     c = length(Primes.primes(low, high))
     println("$c primes between $low and $high.")
@@ -205,14 +205,14 @@ mktempdir() do tmp
         @test Base.invokelatest(test_function,5) == 25
 
         # Create a lambda that uses the TestModule...
-        eval(:(@lambda using TestModule function lambda_test(x)
+        eval(:(AWSLambda.@lambda using TestModule function lambda_test(x)
             return test_function(x)
         end))
 
         @test Base.invokelatest(lambda_test,4) == 16
 
         # Create a lambda that uses the TestModule (with explicit aws config)...
-        eval(:(@lambda using TestModule function lambda_test2(x)
+        eval(:(AWSLambda.@lambda using TestModule function lambda_test2(x)
             return test_function(x)
         end AWSCore.default_aws_config()))
 
@@ -227,7 +227,10 @@ end
 #-------------------------------------------------------------------------------
 
 
-@deploy_lambda function count_primes_slow(low::Int, high::Int)
+AWSLambda.@deploy [
+   :MemorySize => 1024,
+   :Timeout => 60
+] function count_primes_slow(low::Int, high::Int)
 
     function is_prime(n)
         if n ≤ 1
@@ -252,19 +255,19 @@ end
     return c
 end
 
-@test invoke_jl_lambda("count_primes_slow", 10, 100) == 21
-r = invoke_lambda("count_primes_slow", low=10, high=100)
+@test AWSLambda.invoke_jl_lambda("count_primes_slow", 10, 100) == 21
+r = AWSLambda.invoke_lambda("count_primes_slow", low=10, high=100)
 @test r == 21
 
 
-@deploy_lambda using Primes function count_primes_fast(low::Int, high::Int)
+AWSLambda.@deploy using Primes function count_primes_fast(low::Int, high::Int)
 
     c = length(Primes.primes(low, high))
     println("$c primes between $low and $high.")
     return c
 end
 
-@test invoke_jl_lambda("count_primes_fast", 10, 100) == 21
+@test AWSLambda.invoke_jl_lambda("count_primes_fast", 10, 100) == 21
 
 mktempdir() do tmp
     cd(tmp) do

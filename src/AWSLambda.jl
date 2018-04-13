@@ -18,9 +18,7 @@ TODO later:
 
  - can bindeps be deployed easily from BinaryBuilder/Linux??
 
- - deprecate exported names
-
- - rename to be used unexported. e.g. AWSLambda.create
+ - rename functions to shorter e.g. AWSLambda.create
 =#
 
 
@@ -34,20 +32,6 @@ __precompile__()
 
 
 module AWSLambda
-
-
-export list_lambdas, create_lambda, update_lambda, delete_lambda, invoke_lambda,
-       async_lambda, create_jl_lambda, invoke_jl_lambda,
-       @lambda, @deploy_lambda, lambda_add_permission, lambda_get_permissions,
-       lambda_delete_permission, lambda_delete_permissions,
-       create_py_lambda,
-       deploy_jl_lambda_eval,
-       lambda_configuration,
-       lambda_create_alias, lambda_update_alias, lambda_publish_version,
-       apigateway, apigateway_restapis, apigateway_create,
-       @lambda_eval,
-       lambda_eval, lambda_function, lambda_include, lambda_include_string
-
 
 using AWSCore
 using AWSIAM
@@ -737,7 +721,7 @@ macro lambda(args...)
     args = f.args[1].args[2:end]
     arg_names = [isa(a, Expr) ? a.args[1] : a for a in args]
     l = Expr(:quote, Expr(:->, Expr(:tuple, args...), body))
-    f.args[2] = :(lambda_function($aws, eval(Main, $l))($(arg_names...)))
+    f.args[2] = :(AWSLambda.lambda_function($aws, eval(Main, $l))($(arg_names...)))
 
     return esc(f)
 end
@@ -781,10 +765,16 @@ lambda_include(filename) = lambda_include(default_aws_config(), filename)
 
 # Create an AWS Lambda to run "jl_code".
 
-function create_jl_lambda(aws::AWSConfig, name, jl_code,
-                          modules=Symbol[], options=SymbolDict())
+function create_jl_lambda(name, jl_code, modules=Symbol[], options=SymbolDict())
 
-    options = copy(options)
+    options = Dict{Symbol,Any}(copy(options))
+
+    if !haskey(options, :aws)
+        aws = default_aws_config()
+    else
+        aws = options[:aws]
+        delete!(options, :aws)
+    end
 
     # Find files and load path for required modules...
     load_path, mod_files = module_files(aws, modules)
@@ -838,9 +828,6 @@ function create_jl_lambda(aws::AWSConfig, name, jl_code,
 
     deploy_lambda(aws, name, load_path, options, old_config == nothing)
 end
-
-create_jl_lambda(name::String, jl_code, modules=Symbol[], options=SymbolDict()) =
-    create_jl_lambda(default_aws_config(), name, jl_code, modules, options)
 
 
 @lambda using AWSLambda, AWSS3, InfoZIP function deploy_lambda(
@@ -906,7 +893,7 @@ end
 #
 # e.g.
 #
-#   @deploy_lambda function hello(a, b)
+#   AWSLambda.@deploy function hello(a, b)
 #
 #       message = "Hello $a$b"
 #
@@ -918,53 +905,52 @@ end
 #   hello("World", "!") # FIXME invoke lambda
 #   Hello World!
 #
-# @deploy_lambda deploys an AWS Lambda that contains the body of the Julia function.
+# @deploy deploys an AWS Lambda that contains the body of the Julia function.
 
 
 """
-    @deploy_lambda [using ...] function name(args...) body end [aws_config]
+    AWSLambda.@deploy [(option=value, ...)] [using ...] function name(args...)
+        function_body
+    end
 
 Deploy `function` to AWS Lambda.
 """
-macro deploy_lambda(args...)
+macro deploy(options_ex, using_ex, function_ex)
+    deploy_ex(options_ex, using_ex, function_ex)
+end
 
-    @require 1 <= length(args) <= 3
-    @require all(x-> x isa Expr, args[1:end-1])
-    @require args[1].head in (:using, :toplevel, :function)
-    @require args[1].head != :toplevel || all(x->x.head == :using, args[1].args)
-    @require args[1].head == :function || length(args) > 1 &&
-                                          args[2].head == :function
-
-    # Optional last argument is AWSConfig.
-    if !(args[end] isa Expr) || args[end].head != :function
-        aws = args[end]
+macro deploy(ex, function_ex)
+    if ex.head in (:toplevel, :using)
+        deploy_ex(:(Dict{Symbol,Any}()), ex, function_ex)
     else
-        aws = :(AWSCore.default_aws_config())
+        deploy_ex(ex, :(), function_ex)
     end
+end
 
-    if args[1].head == :function
-        f = args[1]
-        body = f.args[2]
-        using_modules = :()
-        modules = Symbol[]
+macro deploy(function_ex)
+    deploy_ex(:(Dict{Symbol,Any}()), :(), function_ex)
+end
+
+
+function deploy_ex(options_ex, using_ex, function_ex)
+
+    @require using_ex == :() || using_ex.head in (:toplevel, :using)
+    @require using_ex.head == :using || all(x->x.head == :using, using_ex.args)
+    @require function_ex.head == :function
+
+    if using_ex.head == :toplevel
+        modules = Symbol[x.args[1] for x in using_ex.args]
+    elseif using_ex.head == :using
+        modules = Symbol[using_ex.args[1]]
     else
-        # Optional first argument is `using Foo, Bar, ...`
-        f = args[2]
-        using_modules = args[1]
-        modules = args[1]
-        if modules.head == :using
-            modules = Expr(:toplevel, modules)
-        end
-        @assert modules.head == :toplevel
-        modules = [x.args[1] for x in modules.args]
-        body = f.args[2]
+        modules = Symbol[]
     end
 
     # Rewrite function name to be :lambda_function...
-    call, body = f.args
+    call, body = function_ex.args
     name = call.args[1]
     call.args[1] = :lambda_function
-    args = f.args[1].args[2:end]
+    args = function_ex.args[1].args[2:end]
 
     # Generate code to extract args from event Dict...
     arg_names = [isa(a, Expr) ? a.args[1] : a for a in args]
@@ -975,9 +961,9 @@ macro deploy_lambda(args...)
 
         module $(Symbol("module_$name"))
 
-        $using_modules
+        $using_ex
 
-        $f
+        $function_ex
 
         function lambda_function_with_event(event::Dict{String,Any})
             lambda_function$get_args
@@ -986,7 +972,7 @@ macro deploy_lambda(args...)
         end
         """
 
-    :(create_jl_lambda($(esc(aws)), $(string(name)), $jl_code, $modules))
+    :(create_jl_lambda($(string(name)), $jl_code, $modules, $(esc(options_ex))))
 end
                                             end # isdefined(Base, :uv_eventloop)
                                                            # For build_sysimg.jl

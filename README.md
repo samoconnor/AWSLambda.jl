@@ -80,7 +80,7 @@ julia> AWSLambda.invoke_lambda("MyFunction", foo=7, bar="xyz")
 The `jl_lambda_eval` Lambda function takes a Julia expression as input and
 returns the result of evaluating that expression. This function must be
 deployed to your AWS account before `AWSLambda.@lambda_eval`,
-`AWSLambda.@lambda` or `AWSLambda.@deploy_lambda` can be used:
+`AWSLambda.@lambda` or `AWSLambda.@deploy` can be used:
 
 ```julia
 julia> using AWSLambda
@@ -265,7 +265,7 @@ precompiles the Julia code to help speed up execution time.
 Deploy a Lambda function to count prime numbers:
 
 ```julia
-julia> @deploy_lambda using Primes function count_primes_fast(low::Int, high::Int)
+julia> AWSLambda.@deploy using Primes function count_primes_fast(low::Int, high::Int)
 
            c = length(Primes.primes(low, high))
            println("$c primes between $low and $high.")
@@ -273,7 +273,7 @@ julia> @deploy_lambda using Primes function count_primes_fast(low::Int, high::In
        end
 ```
 
-The `@deploy_lambda` macro creates a new AWS Lambda named `count_primes_fast`.
+The `@deploy` macro creates a new AWS Lambda named `count_primes_fast`.
 It wraps the body of the function with serialisation/deserialistion code and
 packages it into a .ZIP file along with the source code for the required
 modules. The .ZIP file is then deployed to AWS Lambda. After deployment the
@@ -360,7 +360,10 @@ using TestModule
 
 Use the module in a Lambda...
 ```julia
-julia> AWSLambda.@deploy_lambda using TestModule function module_test(x)
+julia> AWSLambda.@deploy [
+   :MemorySize => 1024,
+   :Timeout => 30
+] using TestModule function module_test(x)
 
            # Check that precompile cache is being used...
            @assert !Base.stale_cachefile("/var/task/TestModule/TestModule.jl",
