@@ -12,6 +12,7 @@ using Retry
 using SymDict
 using JSON
 using Base.Test
+using Primes
 
 AWSCore.set_debug_level(1)
 
@@ -20,7 +21,7 @@ try
     AWSLambda.@lambda_eval run(`uname`)
 catch e
     if ecode(e) == "404"
-        AWSLambda.deploy_jl_lambda_base()
+        AWSLambda.deploy_jl_lambda_eval()
     else
         rethrow(e)
     end
