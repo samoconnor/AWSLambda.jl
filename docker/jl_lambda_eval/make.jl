@@ -3,7 +3,7 @@ using AWSS3
 using AWSLambda
 
 JL_VERSION_BASE="0.6"
-JL_VERSION_PATCH="3"
+JL_VERSION_PATCH="4"
 JL_VERSION="$JL_VERSION_BASE.$JL_VERSION_PATCH"
 
 image_name = "octech/$(replace(basename(pwd()), "_", "")):$JL_VERSION"
