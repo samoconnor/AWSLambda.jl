@@ -798,7 +798,7 @@ function create_jl_lambda(name, jl_code, modules=Symbol[], options=SymbolDict())
           get(aws, :lambda_env, Dict()))
     options[:env] = env
     for (n,v) in env
-        push!(py_config, "os.environ['$n'] = '$v'\n")
+        push!(py_config, "os.environ['$n'] = \"\"\"$v\"\"\"\n")
     end
 
     # Start with ZipFile from options...
